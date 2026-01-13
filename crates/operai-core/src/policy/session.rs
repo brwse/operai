@@ -99,7 +99,6 @@ impl PolicySessionStore for InMemoryPolicySessionStore {
 }
 
 /// Registry that manages Policies and their Session state.
-/// Registry that manages Policies and their Session state.
 #[derive(Debug)]
 pub struct PolicyStore {
     policies: RwLock<HashMap<String, CompiledPolicy>>,

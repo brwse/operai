@@ -86,8 +86,16 @@ define_user_credential! {
     }
 }
 
-// Use in your tool:
-#[tool(description = "Uses credentials")]
+/// # My tool
+///
+/// A tool that uses credentials
+/// 
+/// ## Capabilities
+/// - read
+/// 
+/// ## Tags
+/// - credential
+/// - integration
 async fn my_tool(ctx: Context, input: Input) -> Result<Output, Error> {
     let api_cred = ApiCredential::get(&ctx)?;
     let user_token = UserToken::get(&ctx)?;
@@ -185,4 +193,4 @@ Request headers:
 
 ## License
 
-Apache-2.0
+PolyForm-Noncommercial-1.0.0

@@ -1,0 +1,11 @@
+doc-valid-idents = [
+    "CircleCI",
+    "ClickUp",
+    "ClipPy",
+    "GitHub",
+    "GitLab",
+    "OneDrive",
+    "OneNote",
+    "SharePoint",
+    "..",
+]
