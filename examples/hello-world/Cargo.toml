@@ -1,0 +1,20 @@
+[package]
+name = "hello-world"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license-file.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+operai.workspace = true
+abi_stable.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

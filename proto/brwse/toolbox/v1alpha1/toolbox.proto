@@ -1,0 +1,135 @@
+syntax = "proto3";
+
+package brwse.toolbox.v1alpha1;
+
+import "google/protobuf/struct.proto";
+
+// Resource: Tool
+// Represents a registered tool in the Operai Toolbox.
+message Tool {
+  // Resource name: "tools/{tool_id}" where tool_id is "crate-name.tool-id"
+  // Example: "tools/hello-world.greet"
+  string name = 1;
+
+  // Human-readable display name (e.g., "Say Hello!")
+  string display_name = 2;
+
+  // Tool version from the crate.
+  string version = 3;
+
+  // Description of what the tool does.
+  string description = 4;
+
+  // JSON Schema for the input, represented as protobuf Struct.
+  google.protobuf.Struct input_schema = 5;
+
+  // JSON Schema for the output, represented as protobuf Struct.
+  google.protobuf.Struct output_schema = 6;
+
+  // List of capabilities this tool provides.
+  repeated string capabilities = 7;
+
+  // List of tags for categorization.
+  repeated string tags = 8;
+}
+
+// Standard List request
+message ListToolsRequest {
+  // Maximum number of tools to return (default: 100, max: 1000).
+  int32 page_size = 1;
+
+  // Pagination token from a previous ListToolsResponse.
+  string page_token = 2;
+}
+
+// Standard List response
+message ListToolsResponse {
+  // List of tools.
+  repeated Tool tools = 1;
+
+  // Token for the next page of results.
+  string next_page_token = 2;
+}
+
+// Custom Search request
+message SearchToolsRequest {
+  // Pre-computed query embedding vector.
+  // The client is responsible for generating embeddings using the same model
+  // that was used to generate tool embeddings (e.g., text-embedding-3-small).
+  repeated float query_embedding = 1;
+
+  // Maximum number of results to return (default: 10, max: 100).
+  int32 page_size = 2;
+
+  // Pagination token from a previous SearchToolsResponse.
+  string page_token = 3;
+}
+
+// Search result with relevance score.
+message SearchResult {
+  // The matched tool.
+  Tool tool = 1;
+
+  // Cosine similarity score between 0 and 1.
+  float relevance_score = 2;
+}
+
+// Custom Search response
+message SearchToolsResponse {
+  // Search results sorted by relevance.
+  repeated SearchResult results = 1;
+
+  // Token for the next page of results.
+  string next_page_token = 2;
+}
+
+// Credential data for a single credential.
+message CredentialData {
+  // Key-value pairs for credential fields.
+  map<string, string> values = 1;
+}
+
+// Custom CallTool request
+message CallToolRequest {
+  // Resource name: "tools/{tool_id}"
+  // Example: "tools/hello-world.greet"
+  string name = 1;
+
+  // Input data for the tool, as a protobuf Struct.
+  google.protobuf.Struct input = 2;
+}
+
+// Custom CallTool response
+message CallToolResponse {
+  // Result of the tool invocation.
+  oneof result {
+    // Successful output as a protobuf Struct.
+    google.protobuf.Struct output = 1;
+
+    // Error message if the invocation failed.
+    string error = 2;
+  }
+}
+
+// Operai Toolbox service.
+service Toolbox {
+  // Lists all available tools.
+  // Standard List method.
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+
+  // Searches tools by semantic similarity.
+  // Custom Search method.
+  rpc SearchTools(SearchToolsRequest) returns (SearchToolsResponse);
+
+  // Calls a tool with the given input.
+  // Custom CallTool method.
+  //
+  // Request headers:
+  //   x-request-id: Unique request identifier for tracing.
+  //   x-session-id: Optional session identifier for stateful tools.
+  //   x-user-id: Authenticated user identifier.
+  //   x-credential-{name}: Base64-encoded JSON of CredentialData for each
+  //                        credential required by the tool.
+  //                        Example: x-credential-github: eyJ2YWx1ZXMiOnsi...
+  rpc CallTool(CallToolRequest) returns (CallToolResponse);
+}

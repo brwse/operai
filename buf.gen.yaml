@@ -1,0 +1,14 @@
+version: v2
+plugins:
+  - remote: buf.build/community/neoeinstein-prost:v0.5.0
+    out: crates/operai-runtime/src/gen
+    opt:
+      - bytes=.
+      - compile_well_known_types
+      - extern_path=.google.protobuf=::prost_types
+      - file_descriptor_set
+  - remote: buf.build/community/neoeinstein-tonic:v0.5.0
+    out: crates/operai-runtime/src/gen
+    opt:
+      - compile_well_known_types
+      - extern_path=.google.protobuf=::prost_types

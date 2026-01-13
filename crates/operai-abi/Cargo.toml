@@ -1,0 +1,15 @@
+[package]
+name = "operai-abi"
+version = "0.1.0"
+description = "Stable C ABI types for Operai runtime"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license-file.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+abi_stable = { workspace = true }
+async-ffi = { workspace = true }

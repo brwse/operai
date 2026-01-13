@@ -1,0 +1,50 @@
+[package]
+name = "operai-runtime"
+version = "0.1.0"
+description = "Operai gRPC server"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["prost"] # Used by tonic-build generated code
+
+[lib]
+name = "operai_runtime"
+path = "src/lib.rs"
+
+
+[lints]
+workspace = true
+
+[dependencies]
+operai-abi = { workspace = true }
+operai-core = { workspace = true }
+futures = { workspace = true }
+
+# Stable ABI
+abi_stable = { workspace = true }
+
+# gRPC
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+tonic-health = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+rkyv = { workspace = true }
+
+# Encoding
+base64 = { workspace = true }
+
+# Tracing
+tracing = { workspace = true }
+[dev-dependencies]
+anyhow = { workspace = true }

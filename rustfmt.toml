@@ -1,0 +1,15 @@
+unstable_features = true
+
+# Comments and Docs
+normalize_comments = true
+wrap_comments = true
+format_strings = true
+format_code_in_doc_comments = true
+
+# Imports
+group_imports = "StdExternalCrate"
+imports_granularity = "Crate"
+
+# Shorthands
+use_field_init_shorthand = true
+use_try_shorthand = true

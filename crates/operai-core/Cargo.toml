@@ -1,0 +1,27 @@
+[package]
+name = "operai-core"
+version = "0.1.0"
+description = "Core library for Operai runtime"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license-file.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+operai-abi = { workspace = true }
+
+abi_stable = { workspace = true }
+async-ffi = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+cel-interpreter = "0.10.0"
+serde_json.workspace = true
+async-trait = "0.1.89"
+sha256 = "1.6.0"
+rkyv = { workspace = true }

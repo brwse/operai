@@ -1,0 +1,33 @@
+{
+    "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+    "packages": {
+        "crates/operai-abi": {
+            "component": "operai-abi",
+            "release-type": "rust"
+        },
+        "crates/operai-macro": {
+            "component": "operai-macro",
+            "release-type": "rust"
+        },
+        "crates/operai": {
+            "component": "operai",
+            "release-type": "rust"
+        },
+        "crates/operai-core": {
+            "component": "operai-core",
+            "release-type": "rust"
+        },
+        "crates/operai-runtime": {
+            "component": "operai-runtime",
+            "release-type": "rust"
+        },
+        "crates/operai-build": {
+            "component": "operai-build",
+            "release-type": "rust"
+        },
+        "crates/cargo-operai": {
+            "component": "cargo-operai",
+            "release-type": "rust"
+        }
+    }
+}

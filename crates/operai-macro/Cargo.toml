@@ -1,0 +1,19 @@
+[package]
+name = "operai-macro"
+version = "0.1.0"
+description = "Procedural macros for Operai SDK"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license-file.workspace = true
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]
+syn = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }

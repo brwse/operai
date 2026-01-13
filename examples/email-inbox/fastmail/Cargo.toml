@@ -1,0 +1,27 @@
+[package]
+name = "fastmail"
+version = "0.1.0"
+description = "Brwse tool integration for Fastmail email via JMAP"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license-file.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+abi_stable = { workspace = true }
+operai = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+operai-abi = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"

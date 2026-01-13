@@ -1,0 +1,27 @@
+[package]
+name = "operai"
+version = "0.1.0"
+description = "SDK for building Operai tools"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license-file.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+operai-abi = { workspace = true }
+operai-macro = { workspace = true }
+
+# Re-exported for tools
+abi_stable = { workspace = true }  # Re-exported so proc macros can find it
+serde = { workspace = true }
+serde_json = { workspace = true }
+rkyv = { workspace = true }
+schemars = { workspace = true }
+tracing = { workspace = true }
+inventory = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }

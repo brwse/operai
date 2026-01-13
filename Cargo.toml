@@ -1,0 +1,196 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/operai-abi",
+    "crates/operai-macro",
+    "crates/operai",
+    "crates/operai-core",
+    "crates/operai-runtime",
+    "crates/operai-build",
+    "crates/cargo-operai",
+    "examples/calendars-scheduling/cal-com",
+    "examples/calendars-scheduling/calendly",
+    "examples/calendars-scheduling/doodle",
+    "examples/calendars-scheduling/google-calendar",
+    "examples/calendars-scheduling/outlook-calendar",
+    "examples/email-inbox/fastmail",
+    "examples/email-inbox/gmail",
+    "examples/email-inbox/proton-mail",
+    "examples/email-inbox/imap-smtp",
+    "examples/meetings-calling/aircall",
+    "examples/meetings-calling/dialpad",
+    "examples/meetings-calling/microsoft-teams-meetings",
+    "examples/meetings-calling/webex",
+    "examples/meetings-calling/zoom",
+    "examples/team-chat/discord",
+    "examples/team-chat/google-chat",
+    "examples/team-chat/mattermost",
+    "examples/team-chat/microsoft-teams",
+    "examples/team-chat/rocket-chat",
+    "examples/team-chat/slack",
+    "examples/team-chat/zulip",
+    "examples/docs-notes/confluence",
+    "examples/docs-notes/dropbox-paper",
+    "examples/docs-notes/evernote",
+    "examples/docs-notes/google-docs",
+    "examples/docs-notes/guru",
+    "examples/docs-notes/microsoft-word-online",
+    "examples/docs-notes/notion",
+    "examples/docs-notes/onenote",
+    "examples/docs-notes/slab",
+    "examples/spreadsheets/google-sheets",
+    "examples/spreadsheets/excel-online",
+    "examples/spreadsheets/airtable",
+    "examples/spreadsheets/smartsheet",
+    "examples/spreadsheets/coda",
+    "examples/file-storage/google-drive",
+    "examples/file-storage/onedrive",
+    "examples/file-storage/sharepoint",
+    "examples/file-storage/dropbox",
+    "examples/file-storage/box",
+    "examples/source-control/gerrit",
+    "examples/source-control/gitea",
+    "examples/source-control/github",
+    "examples/source-control/gitlab",
+    "examples/source-control/bitbucket",
+    "examples/source-control/azure-repos",
+    "examples/cicd/github-actions",
+    "examples/cicd/buildkite",
+    "examples/cicd/circleci",
+    "examples/cicd/gitlab-ci",
+    "examples/cicd/jenkins",
+    "examples/project-tasks/asana",
+    "examples/project-tasks/clickup",
+    "examples/project-tasks/jira",
+    "examples/project-tasks/jira-service-management",
+    "examples/project-tasks/linear",
+    "examples/project-tasks/microsoft-to-do",
+    "examples/project-tasks/monday-com",
+    "examples/project-tasks/todoist",
+    "examples/project-tasks/trello",
+    "examples/hello-world",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Brwse Team"]
+repository = "https://github.com/brwse/operai"
+license-file = "LICENSE"
+license = "PolyForm-Noncommercial-1.0.0"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "allow"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+missing_safety_doc = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+expl_impl_clone_on_copy = "allow"
+must_use_candidate = "allow"
+# REASON: APIs might need this.
+struct_excessive_bools = "allow"
+# REASON: Tools need this.
+unused_async = "allow"
+# REASON: APIs might not follow this convention.
+struct_field_names = "allow"
+# REASON: AI generated tend to generate too many lines.
+too_many_lines = "allow"
+
+[workspace.dependencies]
+# Workspace crates
+operai-abi = { path = "crates/operai-abi", version = "0.1.0" }
+operai-macro = { path = "crates/operai-macro", version = "0.1.0" }
+operai = { path = "crates/operai", version = "0.1.0" }
+operai-core = { path = "crates/operai-core", version = "0.1.0" }
+operai-runtime = { path = "crates/operai-runtime", version = "0.1.0" }
+operai-build = { path = "crates/operai-build", version = "0.1.0" }
+
+# gRPC / Protobuf
+tonic = "0.14"
+tonic-build = "0.14"
+tonic-reflection = "0.14"
+prost = "0.14"
+prost-types = "0.14"
+tonic-prost-build = "0.14"
+tonic-health = "0.14"
+tonic-prost = "0.14"
+
+# Stable ABI
+abi_stable = "0.11"
+
+# Proc macros
+syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Async runtime
+tokio = { version = "1.49", features = ["full"] }
+futures = "0.3"
+async-ffi = { version = "0.5", features = ["abi_stable"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rkyv = { version = "0.8", features = ["std", "alloc"] }
+toml = "0.9"
+
+# Schema generation
+schemars = "1.2"
+
+# Bytes
+bytes = "1.9"
+
+# Encoding
+base64 = "0.22"
+
+# Tracing / Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = [
+    "fmt",
+    "std",
+    "json",
+    "env-filter",
+] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Inventory for compile-time registration
+inventory = "0.3"
+
+# Embeddings (async-openai supports OpenAI embedding API)
+async-openai = { version = "0.32", features = ["embedding"] }
+fastembed = "5"
+
+# HTTP client
+reqwest = { version = "0.13", features = [
+    "json",
+    "query",
+    "multipart",
+    "form",
+] }
+
+# GraphQL client
+gql_client = "1.0"
+walkdir = "2.5"
+indicatif = "0.18"
+console = "0.16"
+
+# Testing
+wiremock = "0.6"
+
+# Release profile: maximum optimization
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+overflow-checks = true
