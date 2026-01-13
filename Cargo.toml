@@ -17,7 +17,6 @@ edition = "2024"
 authors = ["Brwse Team"]
 repository = "https://github.com/brwse/operai"
 license-file = "LICENSE"
-license = "PolyForm-Noncommercial-1.0.0"
 publish = false
 
 [workspace.lints.rust]
