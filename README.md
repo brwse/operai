@@ -126,7 +126,7 @@ endpoint = "https://api.example.com"
 │                       Operai Runtime                        │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │              gRPC Service (tonic)                    │   │
-│  │         ListTools | SearchTools | CallTool          │   │
+│  │         ListTools | SearchTools | CallTool           │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                              │                              │
 │  ┌──────────────────────────────────────────────────────┐   │
@@ -136,14 +136,14 @@ endpoint = "https://api.example.com"
 │                              │                              │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │                    Loader                            │   │
-│  │          dlopen/dlsym via libloading                │   │
+│  │          dlopen/dlsym via libloading                 │   │
 │  └──────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
                               │
             ┌─────────────────┼─────────────────┐
             ▼                 ▼                 ▼
     ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-    │  Tool A.dylib │  │  Tool B.dylib │  │  Tool C.dylib │
+    │ Tool A.dylib │  │ Tool B.dylib │  │ Tool C.dylib │
     │   (cdylib)   │  │   (cdylib)   │  │   (cdylib)   │
     └──────────────┘  └──────────────┘  └──────────────┘
 ```
