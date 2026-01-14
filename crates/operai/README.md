@@ -2,7 +2,9 @@
 
 Operai Tool SDK for building native tools.
 
-This crate provides the SDK for building tools that can be loaded by the Operai Toolbox runtime. Tools are compiled as cdylib shared libraries and loaded dynamically at startup.
+This crate provides the SDK for building tools that can be loaded by the Operai
+runtime. Tools are compiled as `cdylib` shared libraries and loaded dynamically
+at startup.
 
 ## Quick Start
 
@@ -23,8 +25,11 @@ struct Output {
 /// # Greet (ID: greet)
 ///
 /// Greets a user by name.
+///
+/// ## Capabilities
+/// - read
 #[tool]
-async fn greet(ctx: Context, input: Input) -> Result<Output> {
+async fn greet(_ctx: Context, input: Input) -> Result<Output> {
     Ok(Output {
         message: format!("Hello, {}!", input.name),
     })
@@ -33,6 +38,13 @@ async fn greet(ctx: Context, input: Input) -> Result<Output> {
 // Required: generates the FFI entrypoint
 operai::generate_tool_entrypoint!();
 ```
+
+## Tool Metadata
+
+The `#[tool]` macro extracts metadata from doc comments:
+
+- `# Title (ID: tool_id)` sets the display name and tool id
+- `## Capabilities` and `## Tags` sections populate structured metadata
 
 ## Lifecycle Hooks
 
@@ -53,14 +65,20 @@ fn cleanup() {
 }
 ```
 
+## Context
+
+`Context` provides request metadata (`request_id`, `session_id`, `user_id`) and
+access to credentials.
+
 ## Credentials
 
-Tools can define credentials that are either system-level (shared) or user-level (per-request):
+Tools can define credentials that are either system-level (shared) or user-level
+(per-request):
 
 ```rust
 use operai::{define_system_credential, define_user_credential};
 
-// System credentials come from environment variables
+// System credentials come from manifest configuration
 define_system_credential! {
     ApiCredential("api") {
         api_key: String,
@@ -74,5 +92,22 @@ define_user_credential! {
     UserToken("user_token") {
         token: String,
     }
+}
+```
+
+Credential structs include a `get(&Context)` helper:
+
+```rust
+let api = ApiCredential::get(&ctx)?;
+let user = UserToken::get(&ctx)?;
+```
+
+## Build Script
+
+To compile `.brwse-embedding` into the tool, add a `build.rs`:
+
+```rust
+fn main() {
+    operai_build::setup();
 }
 ```

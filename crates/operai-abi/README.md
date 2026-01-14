@@ -2,7 +2,7 @@
 
 Stable ABI types for Operai Tool runtime.
 
-This crate defines the FFI boundary between the Operai Toolbox runtime and dynamically loaded tool libraries (cdylib). All types use `abi_stable` for guaranteed ABI stability across Rust compiler versions.
+This crate defines the FFI boundary between the Operai Toolbox runtime and dynamically loaded tool libraries (cdylib). All types use `abi_stable` for guaranteed ABI stability across Rust compiler versions. Tool descriptors include JSON schemas, capabilities/tags, and optional embeddings for search.
 
 ## Ownership Philosophy
 

@@ -1,6 +1,7 @@
-# Potential Integrations for operai-tool
+# Potential Integrations for Operai tools
 
 Each line is `Integration — suggested tiny tools (verbs)`.
+This is a brainstorming list, not an implemented feature set.
 
 Principles:
 - Tools stay narrow (small + many) and split per product (e.g., Gmail ≠ “Google”).
