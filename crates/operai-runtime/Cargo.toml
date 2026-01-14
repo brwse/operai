@@ -1,6 +1,6 @@
 [package]
 name = "operai-runtime"
-version = "0.1.0"
+version = "0.1.1"
 description = "Operai gRPC server"
 edition.workspace = true
 authors.workspace = true
@@ -48,7 +48,10 @@ rkyv = { workspace = true }
 base64 = { workspace = true }
 
 # MCP
-rmcp = { workspace = true, optional = true, features = ["server", "transport-streamable-http-server"] }
+rmcp = { workspace = true, optional = true, features = [
+    "server",
+    "transport-streamable-http-server",
+] }
 http = { workspace = true, optional = true }
 
 # Tracing
@@ -56,5 +59,8 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
-rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
+rmcp = { workspace = true, features = [
+    "client",
+    "transport-streamable-http-client-reqwest",
+] }
 axum = { workspace = true }

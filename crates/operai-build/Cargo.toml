@@ -1,6 +1,6 @@
 [package]
 name = "operai-build"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license-file.workspace = true
 description = "Build-time utilities for Operai tools"

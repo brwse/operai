@@ -44,11 +44,11 @@ too_many_lines = "allow"
 [workspace.dependencies]
 # Workspace crates
 operai-abi = { path = "crates/operai-abi", version = "0.1.0" }
-operai-macro = { path = "crates/operai-macro", version = "0.1.0" }
-operai = { path = "crates/operai", version = "0.1.0" }
-operai-core = { path = "crates/operai-core", version = "0.1.0" }
-operai-runtime = { path = "crates/operai-runtime", version = "0.1.0" }
-operai-build = { path = "crates/operai-build", version = "0.1.0" }
+operai-macro = { path = "crates/operai-macro", version = "0.1.1" }
+operai = { path = "crates/operai", version = "0.1.1" }
+operai-core = { path = "crates/operai-core", version = "0.1.1" }
+operai-runtime = { path = "crates/operai-runtime", version = "0.1.1" }
+operai-build = { path = "crates/operai-build", version = "0.1.1" }
 operai-embedding = { path = "crates/operai-embedding", version = "0.1.0" }
 
 # gRPC / Protobuf

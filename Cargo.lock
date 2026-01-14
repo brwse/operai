@@ -540,7 +540,7 @@ checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
 
 [[package]]
 name = "cargo-operai"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2375,7 +2375,7 @@ dependencies = [
 
 [[package]]
 name = "operai"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "abi_stable",
  "anyhow",
@@ -2401,11 +2401,11 @@ dependencies = [
 
 [[package]]
 name = "operai-build"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "operai-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "abi_stable",
  "async-ffi",
@@ -2439,7 +2439,7 @@ dependencies = [
 
 [[package]]
 name = "operai-macro"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2448,7 +2448,7 @@ dependencies = [
 
 [[package]]
 name = "operai-runtime"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "abi_stable",
  "anyhow",
