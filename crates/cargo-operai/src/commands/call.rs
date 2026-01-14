@@ -3,10 +3,9 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::{Context, Result};
-use base64::Engine;
 use clap::Args;
 use console::style;
-use serde::{Deserialize, Serialize};
+use operai_runtime::{CallMetadata, RuntimeBuilder};
 
 /// Arguments for the `call` command.
 #[derive(Args)]
@@ -33,11 +32,6 @@ pub struct CallArgs {
     pub credentials_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct CredentialData {
-    values: HashMap<String, String>,
-}
-
 pub async fn run(args: &CallArgs) -> Result<()> {
     let input_json = if args.input.starts_with('@') {
         let path = PathBuf::from(&args.input[1..]);
@@ -58,44 +52,29 @@ pub async fn run(args: &CallArgs) -> Result<()> {
 
     let credentials = load_credentials(args)?;
 
-    // Connect to the service
-    let server_url = if args.server.starts_with("http") {
-        args.server.clone()
-    } else {
-        format!("http://{}", args.server)
-    };
-
-    let mut client = operai_runtime::proto::toolbox_client::ToolboxClient::connect(server_url)
+    let runtime = RuntimeBuilder::new()
+        .remote(args.server.clone())
+        .build_remote()
         .await
         .context("failed to connect to toolbox server")?;
 
     // Convert input JSON to google.protobuf.Struct
     let input_struct = json_to_struct(input_value).context("failed to convert input to Struct")?;
 
-    let mut request = tonic::Request::new(operai_runtime::proto::CallToolRequest {
+    let request = operai_runtime::proto::CallToolRequest {
         name: format!("tools/{}", args.tool_id),
         input: Some(input_struct),
-    });
+    };
 
-    // Inject credentials into metadata
-    let metadata = request.metadata_mut();
-    for (provider, data) in credentials {
-        let json = serde_json::to_string(&data)?;
-        let encoded = base64::engine::general_purpose::STANDARD.encode(json);
-        let header_name = format!("x-credential-{provider}");
-        let key = tonic::metadata::MetadataKey::from_bytes(header_name.as_bytes())
-            .with_context(|| format!("invalid credential header name: {header_name}"))?;
-        let val = tonic::metadata::MetadataValue::try_from(encoded)
-            .with_context(|| "invalid credential value")?;
-        metadata.insert(key, val);
-    }
+    let metadata = CallMetadata {
+        credentials,
+        ..Default::default()
+    };
 
-    let response = client
-        .call_tool(request)
+    let response_inner = runtime
+        .call_tool(request, metadata)
         .await
         .context("failed to call tool")?;
-
-    let response_inner = response.into_inner();
 
     match response_inner.result {
         Some(operai_runtime::proto::call_tool_response::Result::Output(output)) => {
@@ -182,8 +161,8 @@ fn prost_value_to_json(v: prost_types::Value) -> serde_json::Value {
     }
 }
 
-fn load_credentials(args: &CallArgs) -> Result<HashMap<String, CredentialData>> {
-    let mut credentials = HashMap::new();
+fn load_credentials(args: &CallArgs) -> Result<HashMap<String, HashMap<String, String>>> {
+    let mut credentials: HashMap<String, HashMap<String, String>> = HashMap::new();
 
     // 1. Load from file (default or specified)
     let file_path = if let Some(path) = &args.credentials_file {
@@ -204,12 +183,7 @@ fn load_credentials(args: &CallArgs) -> Result<HashMap<String, CredentialData>> 
                 for (k, v) in values {
                     processed_values.insert(k, process_value(&v)?);
                 }
-                credentials.insert(
-                    provider,
-                    CredentialData {
-                        values: processed_values,
-                    },
-                );
+                credentials.insert(provider, processed_values);
             }
         } else if args.credentials_file.is_some() {
             anyhow::bail!("credentials file not found: {}", path.display());
@@ -226,10 +200,8 @@ fn load_credentials(args: &CallArgs) -> Result<HashMap<String, CredentialData>> 
 
         credentials
             .entry(provider)
-            .and_modify(|d| d.values.extend(processed_values.clone()))
-            .or_insert(CredentialData {
-                values: processed_values,
-            });
+            .and_modify(|d| d.extend(processed_values.clone()))
+            .or_insert(processed_values);
     }
 
     Ok(credentials)

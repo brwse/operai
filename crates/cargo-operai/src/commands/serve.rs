@@ -1,21 +1,15 @@
 //! `cargo operai serve` command implementation.
 
-use std::{
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
-use operai_abi::RuntimeContext;
-use operai_core::{Manifest, Registry};
-use operai_runtime::{proto, service};
+use operai_runtime::{RuntimeBuilder, proto, transports};
 use tokio::signal;
 use tonic::transport::Server;
 use tonic_health::ServingStatus;
-use tracing::{error, info, warn};
+use tracing::info;
 
 /// Arguments for the `serve` command.
 #[derive(Args)]
@@ -30,62 +24,37 @@ pub struct ServeArgs {
 }
 
 pub async fn run(args: &ServeArgs) -> Result<()> {
+    let shutdown = async {
+        let _ = signal::ctrl_c().await;
+        info!("Received shutdown signal");
+    };
+    run_with_shutdown(args, shutdown).await
+}
+
+async fn run_with_shutdown<F>(args: &ServeArgs, shutdown: F) -> Result<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
     println!("{} Starting local toolbox server...", style("→").cyan());
 
     let manifest_path = args
         .manifest
         .clone()
         .unwrap_or_else(|| PathBuf::from("operai.toml"));
-    let manifest = load_manifest_or_empty(&manifest_path)?;
 
-    let mut registry = Registry::new();
-    let runtime_ctx = RuntimeContext::new();
+    let local_runtime = RuntimeBuilder::new()
+        .with_manifest_path(manifest_path)
+        .build_local()
+        .await
+        .context("failed to initialize runtime")?;
 
-    for tool_config in manifest.enabled_tools() {
-        let path_buf;
-        let path = if let Some(p) = &tool_config.path {
-            p
-        } else if let Some(pkg) = &tool_config.package {
-            // Simple resolution: assume target/release/lib{package}.dylib
-            // In a real implementation, we'd check target/debug if debug profile, and
-            // handle OS extensions.
-            let lib_name = format!("lib{}.dylib", pkg.replace('-', "_"));
-            path_buf = PathBuf::from("target/release").join(lib_name);
-            path_buf.to_str().unwrap()
-        } else {
-            warn!("Tool config missing path and package, skipping.");
-            continue;
-        };
+    println!(
+        "{} Loaded {} tool(s)",
+        style("✓").green().bold(),
+        local_runtime.registry().len()
+    );
 
-        info!(path = %path, "Loading tool library");
-
-        if let Err(e) = registry
-            .load_library(
-                path,
-                tool_config.checksum.as_deref(),
-                Some(&tool_config.credentials),
-                &runtime_ctx,
-            )
-            .await
-        {
-            error!(
-                path = %path,
-                error = %e,
-                "Failed to load tool library"
-            );
-            println!("{} Failed to load tool: {}", style("x").red().bold(), path);
-        } else {
-            println!(
-                "{} Loaded tool library: {}",
-                style("✓").green().bold(),
-                path
-            );
-        }
-    }
-
-    info!(tool_count = registry.len(), "Tool registry initialized");
-
-    let registry = Arc::new(registry);
+    let toolbox_service = transports::grpc::ToolboxService::from_runtime(local_runtime.clone());
 
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
@@ -94,41 +63,6 @@ pub async fn run(args: &ServeArgs) -> Result<()> {
     health_reporter
         .set_service_status("brwse.toolbox.v1alpha1.Toolbox", ServingStatus::Serving)
         .await;
-
-    let session_store = Arc::new(operai_core::policy::session::InMemoryPolicySessionStore::new());
-    let policy_store = Arc::new(operai_core::policy::session::PolicyStore::new(
-        session_store,
-    ));
-
-    // Load policies from manifest
-    match manifest.resolve_policies(&manifest_path) {
-        Ok(policies) => {
-            for policy in policies {
-                info!(
-                    name = ?policy.name,
-                    version = ?policy.version,
-                    "Registered policy"
-                );
-                println!(
-                    "{} Registered policy: {} ({})",
-                    style("✓").green().bold(),
-                    policy.name,
-                    policy.version
-                );
-                let _ = policy_store.register(policy);
-            }
-        }
-        Err(e) => {
-            warn!(error = %e, "Failed to resolve policies from manifest");
-            println!(
-                "{} Failed to load policies: {}",
-                style("!").yellow().bold(),
-                e
-            );
-        }
-    }
-
-    let toolbox_service = service::ToolboxService::new(Arc::clone(&registry), policy_store);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
 
@@ -149,46 +83,36 @@ pub async fn run(args: &ServeArgs) -> Result<()> {
         .add_service(health_service)
         .add_service(reflection_service)
         .add_service(proto::toolbox_server::ToolboxServer::new(toolbox_service))
-        .serve_with_shutdown(addr, async {
-            let _ = signal::ctrl_c().await;
-            info!("Received shutdown signal");
-        })
+        .serve_with_shutdown(addr, shutdown)
         .await
         .context("server error")?;
 
-    // Wait for in-flight tool invocations to complete before exiting.
     info!("Draining inflight requests");
-    registry.drain().await;
+    local_runtime.drain().await;
 
     info!("Operai Toolbox stopped");
     Ok(())
 }
 
-fn load_manifest_or_empty(manifest_path: &Path) -> Result<Manifest> {
-    if manifest_path.exists() {
-        Manifest::load(manifest_path).context("failed to load manifest")
-    } else {
-        // If the user explicitly provided a manifest path that doesn't exist, that's an
-        // error. But the previous behavior (implied by existing code) was
-        // slightly more lenient or different. However, here if we use default
-        // "tools.toml" and it's missing, we warn. If user supplied --manifest
-        // override, we should probably error if missing? For consistency with
-        // previous binary:
-        warn!(
-            path = %manifest_path.display(),
-            "Manifest file not found, starting with empty registry"
-        );
-        Ok(Manifest::empty())
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{
+        net::TcpListener,
+        path::{Path, PathBuf},
+        process::Command,
+        sync::{
+            OnceLock,
+            atomic::{AtomicU64, Ordering},
+        },
+    };
 
     use clap::Parser;
+    use tokio::sync::oneshot;
 
     use super::*;
+
+    static HELLO_WORLD_CDYLIB_PATH: OnceLock<PathBuf> = OnceLock::new();
+    static TEMP_MANIFEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[derive(Parser)]
     struct ServeArgsCli {
@@ -218,5 +142,174 @@ mod tests {
             .expect("short flags should parse");
         assert_eq!(cli.serve.port, 8080);
         assert_eq!(cli.serve.manifest, Some(PathBuf::from("short.toml")));
+    }
+
+    fn workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+    }
+
+    fn cargo_target_dir_and_profile() -> (PathBuf, String) {
+        let exe_path = std::env::current_exe().expect("test executable path should be available");
+        let deps_dir = exe_path
+            .parent()
+            .expect("test executable should live in a deps directory");
+        let profile_dir = deps_dir
+            .parent()
+            .expect("deps directory should have a profile directory parent");
+        let profile = profile_dir
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("debug")
+            .to_string();
+        let target_dir = profile_dir
+            .parent()
+            .expect("profile directory should have a target directory parent");
+        (target_dir.to_path_buf(), profile)
+    }
+
+    fn expected_hello_world_cdylib_file_name() -> String {
+        format!(
+            "{}hello_world{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_SUFFIX
+        )
+    }
+
+    fn find_hello_world_cdylib(target_dir: &Path, profile: &str) -> Option<PathBuf> {
+        let file_name = expected_hello_world_cdylib_file_name();
+        let profile_dir = target_dir.join(profile);
+
+        let direct_path = profile_dir.join(&file_name);
+        if direct_path.is_file() {
+            return Some(direct_path);
+        }
+
+        let deps_dir = profile_dir.join("deps");
+        let entries = std::fs::read_dir(deps_dir).ok()?;
+        for entry in entries {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.file_name().and_then(|s| s.to_str()) == Some(file_name.as_str()) {
+                return Some(path);
+            }
+        }
+
+        None
+    }
+
+    fn build_hello_world_cdylib(target_dir: &Path, profile: &str) {
+        let mut cmd = Command::new("cargo");
+        cmd.current_dir(workspace_root());
+        cmd.args(["build", "-p", "hello-world"]);
+        if profile == "release" {
+            cmd.arg("--release");
+        }
+        cmd.env("CARGO_TARGET_DIR", target_dir);
+
+        let status = cmd.status().expect("cargo build should start");
+        assert!(status.success(), "cargo build -p hello-world failed");
+    }
+
+    fn hello_world_cdylib_path() -> PathBuf {
+        HELLO_WORLD_CDYLIB_PATH
+            .get_or_init(|| {
+                let (target_dir, profile) = cargo_target_dir_and_profile();
+
+                if let Some(path) = find_hello_world_cdylib(&target_dir, &profile) {
+                    return path;
+                }
+
+                build_hello_world_cdylib(&target_dir, &profile);
+
+                find_hello_world_cdylib(&target_dir, &profile)
+                    .unwrap_or_else(|| panic!("hello-world cdylib not found after build"))
+            })
+            .clone()
+    }
+
+    fn temp_manifest_path() -> PathBuf {
+        let counter = TEMP_MANIFEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "cargo-operai-serve-manifest-{}-{counter}.toml",
+            std::process::id()
+        ))
+    }
+
+    fn write_manifest_for_library(path: &Path) -> PathBuf {
+        let manifest_path = temp_manifest_path();
+        let mut path_str = path.display().to_string();
+        if std::path::MAIN_SEPARATOR == '\\' {
+            path_str = path_str.replace('\\', "\\\\");
+        }
+        let contents = format!("[[tools]]\npath = \"{path_str}\"\n");
+        std::fs::write(&manifest_path, contents).expect("write manifest");
+        manifest_path
+    }
+
+    async fn connect_with_retry(
+        endpoint: &str,
+    ) -> operai_runtime::proto::toolbox_client::ToolboxClient<tonic::transport::Channel> {
+        let mut attempts = 0;
+        loop {
+            match operai_runtime::proto::toolbox_client::ToolboxClient::connect(
+                endpoint.to_string(),
+            )
+            .await
+            {
+                Ok(client) => return client,
+                Err(_) if attempts < 30 => {
+                    attempts += 1;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                }
+                Err(e) => panic!("failed to connect to server: {e}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_serve_runs_and_accepts_calls() -> Result<()> {
+        let _lock = crate::testing::test_lock_async().await;
+
+        let lib_path = hello_world_cdylib_path();
+        let manifest_path = write_manifest_for_library(&lib_path);
+
+        let port = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
+        let args = ServeArgs {
+            manifest: Some(manifest_path),
+            port,
+        };
+
+        let (tx, rx) = oneshot::channel::<()>();
+        let server_handle = tokio::spawn(async move {
+            run_with_shutdown(&args, async {
+                let _ = rx.await;
+            })
+            .await
+        });
+
+        let endpoint = format!("http://127.0.0.1:{port}");
+        let mut client = connect_with_retry(&endpoint).await;
+
+        let response = client
+            .list_tools(operai_runtime::proto::ListToolsRequest {
+                page_size: 1000,
+                page_token: String::new(),
+            })
+            .await?
+            .into_inner();
+
+        assert!(
+            response
+                .tools
+                .iter()
+                .any(|tool| tool.name == "tools/hello-world.echo"),
+            "expected hello-world tools to be listed"
+        );
+
+        let _ = tx.send(());
+        server_handle.await.expect("server task")?;
+        Ok(())
     }
 }

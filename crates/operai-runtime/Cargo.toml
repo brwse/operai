@@ -14,6 +14,8 @@ ignored = ["prost"] # Used by tonic-build generated code
 name = "operai_runtime"
 path = "src/lib.rs"
 
+[features]
+static-link = []
 
 [lints]
 workspace = true
@@ -46,5 +48,6 @@ base64 = { workspace = true }
 
 # Tracing
 tracing = { workspace = true }
+thiserror = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }

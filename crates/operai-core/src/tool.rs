@@ -10,11 +10,14 @@ use std::{
 
 use abi_stable::std_types::{RSlice, RStr};
 use async_ffi::FfiFuture;
-use operai_abi::{CallArgs, CallContext, CallResult, RuntimeContext, ToolModuleRef};
+use operai_abi::{
+    CallArgs, CallContext, CallResult, InitArgs, RuntimeContext, TOOL_ABI_VERSION, ToolModuleRef,
+    ToolResult,
+};
 use rkyv::rancor::BoxedError;
 use tracing::{info, instrument};
 
-use crate::loader::{LoadError, LoadedLibrary};
+use crate::loader::{LoadError, ToolLibrary};
 
 /// Errors that can occur when working with the registry.
 #[derive(Debug, thiserror::Error)]
@@ -79,9 +82,9 @@ impl ToolHandle {
 }
 
 /// Registry of loaded tools.
-pub struct Registry {
+pub struct ToolRegistry {
     /// Kept alive to prevent dynamic libraries from unloading.
-    libraries: Vec<LoadedLibrary>,
+    libraries: Vec<ToolLibrary>,
     tools: HashMap<String, Arc<ToolHandle>>,
     /// `(qualified_id, embedding)` pairs for semantic search.
     embeddings: Vec<(String, Vec<f32>)>,
@@ -92,7 +95,7 @@ pub struct Registry {
 /// RAII guard that decrements the registry's in-flight request counter on drop.
 #[must_use = "if unused, the in-flight request will be immediately ended"]
 pub struct InflightRequestGuard<'a> {
-    registry: &'a Registry,
+    registry: &'a ToolRegistry,
 }
 
 impl Drop for InflightRequestGuard<'_> {
@@ -101,7 +104,7 @@ impl Drop for InflightRequestGuard<'_> {
     }
 }
 
-impl Registry {
+impl ToolRegistry {
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -128,12 +131,55 @@ impl Registry {
         credentials: Option<&HashMap<String, HashMap<String, String>>>,
         runtime_ctx: &RuntimeContext,
     ) -> Result<(), RegistryError> {
-        let library = LoadedLibrary::load(&path, checksum)?;
+        let library = ToolLibrary::load(&path, checksum)?;
         library.init(runtime_ctx).await?;
 
-        let crate_name = library.crate_name();
-        let crate_version = library.crate_version();
-        let module = library.module();
+        self.register_module_ref(library.module(), credentials)?;
+        self.libraries.push(library);
+
+        Ok(())
+    }
+
+    /// Registers a statically linked tool module.
+    ///
+    /// The caller must ensure the module remains valid for the lifetime of the
+    /// registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ABI version is incompatible, initialization
+    /// fails, or any tool ID is duplicated.
+    pub async fn register_module(
+        &mut self,
+        module: ToolModuleRef,
+        credentials: Option<&HashMap<String, HashMap<String, String>>>,
+        runtime_ctx: &RuntimeContext,
+    ) -> Result<(), RegistryError> {
+        let meta = module.meta();
+        if meta.abi_version != TOOL_ABI_VERSION {
+            return Err(RegistryError::LoadError(LoadError::AbiMismatch {
+                expected: TOOL_ABI_VERSION,
+                actual: meta.abi_version,
+            }));
+        }
+
+        let args = InitArgs::new(*runtime_ctx);
+        let result = (module.init())(args).await;
+        if result != ToolResult::Ok {
+            return Err(RegistryError::LoadError(LoadError::InitFailed));
+        }
+
+        self.register_module_ref(module, credentials)
+    }
+
+    fn register_module_ref(
+        &mut self,
+        module: ToolModuleRef,
+        credentials: Option<&HashMap<String, HashMap<String, String>>>,
+    ) -> Result<(), RegistryError> {
+        let meta = module.meta();
+        let crate_name = meta.crate_name.as_str();
+        let crate_version = meta.crate_version.as_str();
 
         for descriptor in module.descriptors_iter() {
             let tool_id = descriptor.id.as_str().to_string();
@@ -208,8 +254,6 @@ impl Registry {
             info!(qualified_id = %qualified_id, "Registered tool");
             self.tools.insert(qualified_id, Arc::new(handle));
         }
-
-        self.libraries.push(library);
 
         Ok(())
     }
@@ -292,7 +336,7 @@ impl Registry {
     }
 }
 
-impl Default for Registry {
+impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
     }
@@ -388,7 +432,7 @@ mod tests {
         }
     }
 
-    fn insert_test_tool(registry: &mut Registry, info: ToolInfo) {
+    fn insert_test_tool(registry: &mut ToolRegistry, info: ToolInfo) {
         let qualified_id = info.qualified_id.clone();
         if let Some(ref embedding) = info.embedding {
             registry
@@ -454,14 +498,14 @@ mod tests {
 
     #[test]
     fn test_empty_registry() {
-        let registry = Registry::new();
+        let registry = ToolRegistry::new();
         assert!(registry.is_empty());
         assert_eq!(registry.len(), 0);
     }
 
     #[test]
     fn test_inflight_counter_basic() {
-        let registry = Registry::new();
+        let registry = ToolRegistry::new();
         assert_eq!(registry.inflight_count(), 0);
 
         registry.start_request();
@@ -481,7 +525,7 @@ mod tests {
     fn test_inflight_counter_concurrent_increments() {
         use std::{sync::Arc, thread};
 
-        let registry = Arc::new(Registry::new());
+        let registry = Arc::new(ToolRegistry::new());
         let num_threads = 100;
         let increments_per_thread = 1000;
 
@@ -510,7 +554,7 @@ mod tests {
     fn test_inflight_counter_concurrent_inc_dec() {
         use std::{sync::Arc, thread};
 
-        let registry = Arc::new(Registry::new());
+        let registry = Arc::new(ToolRegistry::new());
         let num_threads = 50;
         let ops_per_thread = 1000;
 
@@ -536,7 +580,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drain_empty_registry() {
-        let registry = Registry::new();
+        let registry = ToolRegistry::new();
         registry.drain().await;
         assert_eq!(registry.inflight_count(), 0);
     }
@@ -564,14 +608,14 @@ mod tests {
 
     #[test]
     fn test_registry_default_returns_empty_registry() {
-        let registry = Registry::default();
+        let registry = ToolRegistry::default();
         assert!(registry.is_empty());
         assert_eq!(registry.len(), 0);
     }
 
     #[test]
     fn test_registry_search_empty_query_embedding_returns_empty() {
-        let mut registry = Registry::new();
+        let mut registry = ToolRegistry::new();
         insert_test_tool(
             &mut registry,
             test_tool_info("test-crate.tool-a", "tool-a", Some(vec![1.0, 0.0])),
@@ -583,7 +627,7 @@ mod tests {
 
     #[test]
     fn test_registry_search_returns_sorted_results_and_respects_limit() {
-        let mut registry = Registry::new();
+        let mut registry = ToolRegistry::new();
         insert_test_tool(
             &mut registry,
             test_tool_info("test-crate.tool-a", "tool-a", Some(vec![1.0, 0.0])),
@@ -607,7 +651,7 @@ mod tests {
 
     #[test]
     fn test_registry_search_skips_tools_without_embeddings() {
-        let mut registry = Registry::new();
+        let mut registry = ToolRegistry::new();
         insert_test_tool(
             &mut registry,
             test_tool_info("test-crate.tool-a", "tool-a", None),
@@ -619,7 +663,7 @@ mod tests {
 
     #[test]
     fn test_registry_search_with_limit_zero_returns_empty() {
-        let mut registry = Registry::new();
+        let mut registry = ToolRegistry::new();
         insert_test_tool(
             &mut registry,
             test_tool_info("test-crate.tool-a", "tool-a", Some(vec![1.0, 0.0])),
@@ -631,14 +675,14 @@ mod tests {
 
     #[test]
     fn test_registry_search_empty_registry_returns_empty() {
-        let registry = Registry::new();
+        let registry = ToolRegistry::new();
         let results = registry.search(&[1.0, 0.0], 10);
         assert!(results.is_empty());
     }
 
     #[test]
     fn test_registry_search_with_nan_embedding_does_not_panic() {
-        let mut registry = Registry::new();
+        let mut registry = ToolRegistry::new();
         insert_test_tool(
             &mut registry,
             test_tool_info("test-crate.tool-a", "tool-a", Some(vec![1.0, 0.0])),
@@ -688,7 +732,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drain_waits_for_inflight_requests_to_complete() {
-        let registry = Arc::new(Registry::new());
+        let registry = Arc::new(ToolRegistry::new());
         registry.start_request();
 
         let cloned = Arc::clone(&registry);
@@ -705,7 +749,7 @@ mod tests {
 
     #[test]
     fn test_inflight_request_guard_decrements_on_drop() {
-        let registry = Registry::new();
+        let registry = ToolRegistry::new();
         assert_eq!(registry.inflight_count(), 0);
 
         {
@@ -718,7 +762,7 @@ mod tests {
 
     #[test]
     fn test_inflight_request_guard_multiple_guards() {
-        let registry = Registry::new();
+        let registry = ToolRegistry::new();
 
         let guard1 = registry.start_request_guard();
         let guard2 = registry.start_request_guard();
@@ -733,7 +777,7 @@ mod tests {
 
     #[test]
     fn test_end_request_saturates_at_zero() {
-        let registry = Registry::new();
+        let registry = ToolRegistry::new();
         assert_eq!(registry.inflight_count(), 0);
 
         registry.end_request();
@@ -745,7 +789,7 @@ mod tests {
 
     #[test]
     fn test_registry_get_returns_tool_by_qualified_id() {
-        let mut registry = Registry::new();
+        let mut registry = ToolRegistry::new();
         insert_test_tool(
             &mut registry,
             test_tool_info("test-crate.tool-a", "tool-a", None),
@@ -758,13 +802,13 @@ mod tests {
 
     #[test]
     fn test_registry_get_returns_none_for_nonexistent_tool() {
-        let registry = Registry::new();
+        let registry = ToolRegistry::new();
         assert!(registry.get("nonexistent.tool").is_none());
     }
 
     #[test]
     fn test_registry_list_returns_all_tool_infos() {
-        let mut registry = Registry::new();
+        let mut registry = ToolRegistry::new();
         insert_test_tool(
             &mut registry,
             test_tool_info("test-crate.tool-a", "tool-a", None),
@@ -787,7 +831,7 @@ mod tests {
 
     #[test]
     fn test_registry_len_and_is_empty_with_tools() {
-        let mut registry = Registry::new();
+        let mut registry = ToolRegistry::new();
         assert!(registry.is_empty());
         assert_eq!(registry.len(), 0);
 
@@ -836,7 +880,7 @@ mod tests {
 
     #[test]
     fn test_registry_list_empty_registry_returns_empty_iterator() {
-        let registry = Registry::new();
+        let registry = ToolRegistry::new();
         let infos: Vec<_> = registry.list().collect();
         assert!(infos.is_empty());
     }

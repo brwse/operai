@@ -1,50 +1,36 @@
 use std::{collections::HashMap, sync::Arc};
 
-use abi_stable::std_types::{RSlice, RStr};
 use base64::prelude::*;
-use futures::FutureExt;
-use operai_abi::{CallContext, ToolResult};
-use operai_core::{PolicyError, Registry, ToolInfo, policy::session::PolicyStore};
-use rkyv::rancor::BoxedError;
+use operai_core::{ToolRegistry, policy::session::PolicyStore};
 use tonic::{Request, Response, Status};
-use tracing::{error, info, instrument, warn};
+use tracing::{instrument, warn};
 
-use crate::proto::{
-    CallToolRequest, CallToolResponse, ListToolsRequest, ListToolsResponse, SearchResult,
-    SearchToolsRequest, SearchToolsResponse, Tool, call_tool_response, toolbox_server::Toolbox,
+use crate::{
+    proto::{
+        CallToolRequest, CallToolResponse, ListToolsRequest, ListToolsResponse, SearchToolsRequest,
+        SearchToolsResponse, toolbox_server::Toolbox,
+    },
+    runtime::{CallMetadata, LocalRuntime},
 };
 
 pub struct ToolboxService {
-    registry: Arc<Registry>,
-    policy_store: Arc<PolicyStore>,
+    runtime: LocalRuntime,
 }
 
 impl ToolboxService {
     #[must_use]
-    pub fn new(registry: Arc<Registry>, policy_store: Arc<PolicyStore>) -> Self {
-        Self {
-            registry,
-            policy_store,
-        }
+    pub fn new(registry: Arc<ToolRegistry>, policy_store: Arc<PolicyStore>) -> Self {
+        Self::from_runtime(LocalRuntime::new(registry, policy_store))
     }
 
-    fn tool_info_to_proto(info: &ToolInfo) -> Tool {
-        Tool {
-            name: format!("tools/{}", info.qualified_id),
-            display_name: info.display_name.clone(),
-            version: info.crate_version.clone(),
-            description: info.description.clone(),
-            input_schema: json_str_to_struct(&info.input_schema),
-            output_schema: json_str_to_struct(&info.output_schema),
-            capabilities: info.capabilities.clone(),
-            tags: info.tags.clone(),
-        }
+    #[must_use]
+    pub fn from_runtime(runtime: LocalRuntime) -> Self {
+        Self { runtime }
     }
 
-    /// Extracts tool ID from resource name format (e.g.,
-    /// `tools/my-tool`).
-    fn extract_tool_id(name: &str) -> Option<&str> {
-        name.strip_prefix("tools/")
+    #[must_use]
+    pub fn runtime(&self) -> &LocalRuntime {
+        &self.runtime
     }
 
     fn extract_metadata<T>(request: &Request<T>) -> (String, String, String) {
@@ -97,38 +83,8 @@ impl Toolbox for ToolboxService {
         &self,
         request: Request<ListToolsRequest>,
     ) -> Result<Response<ListToolsResponse>, Status> {
-        let req = request.into_inner();
-
-        let page_size: usize = if req.page_size <= 0 {
-            100
-        } else {
-            usize::try_from(req.page_size.min(1000)).unwrap_or(1000)
-        };
-
-        // page_token is a stringified offset for simple cursor pagination
-        let offset: usize = req.page_token.parse().unwrap_or(0);
-
-        let all_tools: Vec<_> = self.registry.list().collect();
-        let total = all_tools.len();
-
-        let tools: Vec<Tool> = all_tools
-            .into_iter()
-            .skip(offset)
-            .take(page_size)
-            .map(Self::tool_info_to_proto)
-            .collect();
-
-        let next_offset = offset + tools.len();
-        let next_page_token = if next_offset < total {
-            next_offset.to_string()
-        } else {
-            String::new()
-        };
-
-        Ok(Response::new(ListToolsResponse {
-            tools,
-            next_page_token,
-        }))
+        let response = self.runtime.list_tools(request.into_inner()).await?;
+        Ok(Response::new(response))
     }
 
     #[instrument(skip(self, request), fields(embedding_dims))]
@@ -136,43 +92,8 @@ impl Toolbox for ToolboxService {
         &self,
         request: Request<SearchToolsRequest>,
     ) -> Result<Response<SearchToolsResponse>, Status> {
-        let req = request.into_inner();
-
-        if req.query_embedding.is_empty() {
-            return Err(Status::invalid_argument("query_embedding is required"));
-        }
-
-        let page_size = if req.page_size <= 0 {
-            10
-        } else {
-            usize::try_from(req.page_size.min(100)).unwrap_or(100)
-        };
-
-        info!(
-            embedding_dims = req.query_embedding.len(),
-            "Searching with provided embedding"
-        );
-
-        let search_results = self.registry.search(&req.query_embedding, page_size);
-
-        let results: Vec<SearchResult> = search_results
-            .into_iter()
-            .map(|(tool_info, score)| SearchResult {
-                tool: Some(Self::tool_info_to_proto(tool_info)),
-                relevance_score: score,
-            })
-            .collect();
-
-        info!(
-            embedding_dims = req.query_embedding.len(),
-            result_count = results.len(),
-            "Search completed"
-        );
-
-        Ok(Response::new(SearchToolsResponse {
-            results,
-            next_page_token: String::new(),
-        }))
+        let response = self.runtime.search_tools(request.into_inner()).await?;
+        Ok(Response::new(response))
     }
 
     #[instrument(skip(self, request), fields(tool_name))]
@@ -182,200 +103,19 @@ impl Toolbox for ToolboxService {
     ) -> Result<Response<CallToolResponse>, Status> {
         let (request_id, session_id, user_id) = Self::extract_metadata(&request);
         let user_creds = Self::extract_credentials(&request);
-        let req = request.into_inner();
-
-        let tool_id = Self::extract_tool_id(&req.name)
-            .ok_or_else(|| Status::invalid_argument("invalid tool name format"))?;
-
-        let handle = self
-            .registry
-            .get(tool_id)
-            .ok_or_else(|| Status::not_found(format!("tool not found: {tool_id}")))?;
-
-        info!(
-            tool_id = %tool_id,
-            request_id = %request_id,
-            "Invoking tool"
-        );
-
-        let inflight_guard = self.registry.start_request_guard();
-
-        let input_value = if let Some(s) = req.input.as_ref() {
-            struct_to_json_value(s)
-        } else {
-            serde_json::Value::Object(serde_json::Map::new())
-        };
-        let input_json = serde_json::to_vec(&input_value).unwrap_or_else(|_| b"{}".to_vec());
-
-        // --- Policy Check (Guards) ---
-        // We now enforce policy regardless of specific policy ID in headers.
-        // We apply ALL policies. (Or maybe we should still respect policy ID filtering
-        // if desired? The user said "all policies should be applied", which
-        // implies global enforcement.)
-
-        self.policy_store
-            .evaluate_pre_effects(&session_id, tool_id, &input_value)
-            .await
-            .map_err(|e| match e {
-                PolicyError::GuardFailed(msg) => Status::permission_denied(msg),
-                _ => Status::internal(format!("policy evaluation error: {e}")),
-            })?;
-
-        let user_creds_bin =
-            rkyv::to_bytes::<BoxedError>(&user_creds).expect("failed to serialize credentials");
-        let system_creds_bin = &handle.system_credentials;
-
-        let context = CallContext {
-            request_id: RStr::from_str(&request_id),
-            session_id: RStr::from_str(&session_id),
-            user_id: RStr::from_str(&user_id),
-            user_credentials: RSlice::from_slice(&user_creds_bin),
-            system_credentials: RSlice::from_slice(system_creds_bin),
+        let metadata = CallMetadata {
+            request_id,
+            session_id,
+            user_id,
+            credentials: user_creds,
         };
 
-        let result =
-            std::panic::AssertUnwindSafe(handle.call(context, RSlice::from_slice(&input_json)))
-                .catch_unwind()
-                .await;
+        let response = self
+            .runtime
+            .call_tool(request.into_inner(), metadata)
+            .await?;
 
-        drop(inflight_guard);
-
-        let (rpc_result, policy_outcome_val, policy_outcome_err) = if let Ok(call_result) = result {
-            match call_result.result {
-                ToolResult::Ok => {
-                    let output_value: serde_json::Value =
-                        serde_json::from_slice(call_result.output.as_slice())
-                            .unwrap_or(serde_json::Value::Null);
-                    let output_struct = json_value_to_struct(&output_value).unwrap_or_default();
-
-                    (
-                        Ok(Response::new(CallToolResponse {
-                            result: Some(call_tool_response::Result::Output(output_struct)),
-                        })),
-                        Some(output_value),
-                        None,
-                    )
-                }
-                ToolResult::Error => {
-                    let error_msg =
-                        String::from_utf8_lossy(call_result.output.as_slice()).to_string();
-                    error!(tool_id = %tool_id, error = %error_msg, "Tool invocation failed");
-
-                    (
-                        Ok(Response::new(CallToolResponse {
-                            result: Some(call_tool_response::Result::Error(error_msg.clone())),
-                        })),
-                        None,
-                        Some(error_msg),
-                    )
-                }
-                other => {
-                    error!(tool_id = %tool_id, result = ?other, "Tool invocation failed");
-                    let msg = format!("tool error: {other:?}");
-                    (
-                        Ok(Response::new(CallToolResponse {
-                            result: Some(call_tool_response::Result::Error(msg.clone())),
-                        })),
-                        None,
-                        Some(msg),
-                    )
-                }
-            }
-        } else {
-            let msg = "Tool execution panicked".to_string();
-            (
-                Err(Status::internal(&msg)), /* gRPC error for panic? Or CallToolResponse
-                                              * error? Earlier code returned
-                                              * Status::internal. */
-                None,
-                Some(msg),
-            )
-        };
-
-        // Unified Policy Update
-        let policy_res_arg = match &policy_outcome_err {
-            Some(e) => Err(e.as_str()),
-            None => Ok(policy_outcome_val
-                .as_ref()
-                .unwrap_or(&serde_json::Value::Null)),
-        };
-
-        self.policy_store
-            .evaluate_post_effects(&session_id, tool_id, &input_value, policy_res_arg)
-            .await
-            .map_err(|e| Status::internal(format!("policy effect error: {e}")))?;
-
-        rpc_result
-    }
-}
-
-fn json_str_to_struct(json: &str) -> Option<prost_types::Struct> {
-    let value: serde_json::Value = serde_json::from_str(json).ok()?;
-    json_value_to_struct(&value)
-}
-
-fn json_value_to_struct(value: &serde_json::Value) -> Option<prost_types::Struct> {
-    match value {
-        serde_json::Value::Object(map) => {
-            let fields = map
-                .iter()
-                .map(|(k, v)| (k.clone(), json_value_to_prost_value(v)))
-                .collect();
-            Some(prost_types::Struct { fields })
-        }
-        _ => None,
-    }
-}
-
-fn json_value_to_prost_value(value: &serde_json::Value) -> prost_types::Value {
-    use prost_types::value::Kind;
-
-    let kind = match value {
-        serde_json::Value::Null => Kind::NullValue(0),
-        serde_json::Value::Bool(b) => Kind::BoolValue(*b),
-        serde_json::Value::Number(n) => Kind::NumberValue(n.as_f64().unwrap_or(0.0)),
-        serde_json::Value::String(s) => Kind::StringValue(s.clone()),
-        serde_json::Value::Array(arr) => {
-            let values = arr.iter().map(json_value_to_prost_value).collect();
-            Kind::ListValue(prost_types::ListValue { values })
-        }
-        serde_json::Value::Object(map) => {
-            let fields = map
-                .iter()
-                .map(|(k, v)| (k.clone(), json_value_to_prost_value(v)))
-                .collect();
-            Kind::StructValue(prost_types::Struct { fields })
-        }
-    };
-
-    prost_types::Value { kind: Some(kind) }
-}
-
-fn struct_to_json_value(s: &prost_types::Struct) -> serde_json::Value {
-    let map: serde_json::Map<String, serde_json::Value> = s
-        .fields
-        .iter()
-        .map(|(k, v)| (k.clone(), prost_value_to_json_value(v)))
-        .collect();
-    serde_json::Value::Object(map)
-}
-
-fn prost_value_to_json_value(value: &prost_types::Value) -> serde_json::Value {
-    use prost_types::value::Kind;
-
-    match &value.kind {
-        None | Some(Kind::NullValue(_)) => serde_json::Value::Null,
-        Some(Kind::BoolValue(b)) => serde_json::Value::Bool(*b),
-        Some(Kind::NumberValue(n)) => serde_json::Value::Number(
-            serde_json::Number::from_f64(*n).unwrap_or_else(|| serde_json::Number::from(0)),
-        ),
-        Some(Kind::StringValue(s)) => serde_json::Value::String(s.clone()),
-        Some(Kind::ListValue(list)) => {
-            let arr: Vec<serde_json::Value> =
-                list.values.iter().map(prost_value_to_json_value).collect();
-            serde_json::Value::Array(arr)
-        }
-        Some(Kind::StructValue(s)) => struct_to_json_value(s),
+        Ok(Response::new(response))
     }
 }
 
@@ -392,6 +132,13 @@ mod tests {
     use tonic::Code;
 
     use super::*;
+    use crate::{
+        proto::call_tool_response,
+        runtime::{
+            extract_tool_id, json_str_to_struct, json_value_to_struct, prost_value_to_json_value,
+            struct_to_json_value,
+        },
+    };
 
     static HELLO_WORLD_CDYLIB_PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -480,10 +227,10 @@ mod tests {
             .clone()
     }
 
-    async fn service_with_hello_world_registry() -> (ToolboxService, Arc<Registry>) {
+    async fn service_with_hello_world_registry() -> (ToolboxService, Arc<ToolRegistry>) {
         let lib_path = hello_world_cdylib_path();
 
-        let mut registry = Registry::new();
+        let mut registry = ToolRegistry::new();
         let runtime_ctx = RuntimeContext::new();
         registry
             .load_library(lib_path, None, None, &runtime_ctx)
@@ -658,7 +405,7 @@ mod tests {
     async fn test_search_tools_with_empty_embedding_returns_invalid_argument() {
         // Arrange
         let service = ToolboxService::new(
-            Arc::new(Registry::new()),
+            Arc::new(ToolRegistry::new()),
             Arc::new(operai_core::policy::session::PolicyStore::new(Arc::new(
                 operai_core::policy::session::InMemoryPolicySessionStore::new(),
             ))),
@@ -683,7 +430,7 @@ mod tests {
     async fn test_search_tools_with_embedding_returns_ok_even_if_no_results() {
         // Arrange
         let service = ToolboxService::new(
-            Arc::new(Registry::new()),
+            Arc::new(ToolRegistry::new()),
             Arc::new(operai_core::policy::session::PolicyStore::new(Arc::new(
                 operai_core::policy::session::InMemoryPolicySessionStore::new(),
             ))),
@@ -709,7 +456,7 @@ mod tests {
     async fn test_call_tool_with_invalid_name_format_returns_invalid_argument() {
         // Arrange
         let service = ToolboxService::new(
-            Arc::new(Registry::new()),
+            Arc::new(ToolRegistry::new()),
             Arc::new(operai_core::policy::session::PolicyStore::new(Arc::new(
                 operai_core::policy::session::InMemoryPolicySessionStore::new(),
             ))),
@@ -733,7 +480,7 @@ mod tests {
     async fn test_call_tool_with_unknown_tool_returns_not_found() {
         // Arrange
         let service = ToolboxService::new(
-            Arc::new(Registry::new()),
+            Arc::new(ToolRegistry::new()),
             Arc::new(operai_core::policy::session::PolicyStore::new(Arc::new(
                 operai_core::policy::session::InMemoryPolicySessionStore::new(),
             ))),
@@ -948,21 +695,18 @@ mod tests {
 
     #[test]
     fn test_extract_tool_id_strips_tools_prefix() {
+        assert_eq!(extract_tool_id("tools/my-tool"), Some("my-tool"));
         assert_eq!(
-            ToolboxService::extract_tool_id("tools/my-tool"),
-            Some("my-tool")
-        );
-        assert_eq!(
-            ToolboxService::extract_tool_id("tools/namespace.tool-name"),
+            extract_tool_id("tools/namespace.tool-name"),
             Some("namespace.tool-name")
         );
     }
 
     #[test]
     fn test_extract_tool_id_returns_none_without_prefix() {
-        assert_eq!(ToolboxService::extract_tool_id("my-tool"), None);
-        assert_eq!(ToolboxService::extract_tool_id("tool/my-tool"), None);
-        assert_eq!(ToolboxService::extract_tool_id(""), None);
+        assert_eq!(extract_tool_id("my-tool"), None);
+        assert_eq!(extract_tool_id("tool/my-tool"), None);
+        assert_eq!(extract_tool_id(""), None);
     }
 
     #[test]
@@ -1204,7 +948,7 @@ mod tests {
     #[test]
     fn test_extract_tool_id_handles_empty_after_prefix() {
         // Arrange / Act / Assert
-        assert_eq!(ToolboxService::extract_tool_id("tools/"), Some(""));
+        assert_eq!(extract_tool_id("tools/"), Some(""));
     }
 
     #[test]

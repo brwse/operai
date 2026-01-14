@@ -8,11 +8,11 @@
 
 mod loader;
 mod manifest;
-mod registry;
+mod tool;
 
-pub use loader::{LoadError, LoadedLibrary};
+pub use loader::{LoadError, ToolLibrary};
 pub use manifest::{Manifest, ManifestError, ToolConfig};
-pub use registry::{InflightRequestGuard, Registry, RegistryError, ToolHandle, ToolInfo};
+pub use tool::{InflightRequestGuard, RegistryError, ToolHandle, ToolInfo, ToolRegistry};
 
 pub mod policy;
 // Re-export specific items for convenience, but the module itself is also

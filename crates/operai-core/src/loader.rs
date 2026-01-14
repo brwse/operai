@@ -37,14 +37,14 @@ pub enum LoadError {
 ///
 /// This struct owns the loaded library and provides access to its module.
 /// The library is unloaded when this struct is dropped.
-pub struct LoadedLibrary {
+pub struct ToolLibrary {
     /// Managed by `abi_stable` - automatically handles library unloading.
     module: ToolModuleRef,
     path: String,
     shutdown_called: AtomicBool,
 }
 
-impl LoadedLibrary {
+impl ToolLibrary {
     /// Loads a tool library from the specified path.
     ///
     /// This function uses `abi_stable`'s `RootModule` loading which provides
@@ -163,7 +163,7 @@ impl LoadedLibrary {
     }
 }
 
-impl Drop for LoadedLibrary {
+impl Drop for ToolLibrary {
     fn drop(&mut self) {
         self.shutdown();
     }
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_load_nonexistent_file_returns_library_load_error() {
-        let result = LoadedLibrary::load("/nonexistent/path/to/library.so", None);
+        let result = ToolLibrary::load("/nonexistent/path/to/library.so", None);
 
         let Err(err) = result else {
             panic!("expected loading nonexistent file to fail");
@@ -276,7 +276,7 @@ mod tests {
             init_ok,
             shutdown_noop,
         );
-        let library = LoadedLibrary {
+        let library = ToolLibrary {
             module,
             path: "test-path".to_string(),
             shutdown_called: AtomicBool::new(false),
@@ -317,7 +317,7 @@ mod tests {
             init_error,
             shutdown_noop,
         );
-        let library = LoadedLibrary {
+        let library = ToolLibrary {
             module,
             path: "test-path".to_string(),
             shutdown_called: AtomicBool::new(false),
@@ -366,7 +366,7 @@ mod tests {
 
         // Act
         {
-            let library = LoadedLibrary {
+            let library = ToolLibrary {
                 module,
                 path: "test-path".to_string(),
                 shutdown_called: AtomicBool::new(false),
@@ -409,7 +409,7 @@ mod tests {
 
         // Act - let drop handle shutdown
         {
-            let _library = LoadedLibrary {
+            let _library = ToolLibrary {
                 module,
                 path: "test-path".to_string(),
                 shutdown_called: AtomicBool::new(false),
@@ -438,7 +438,7 @@ mod tests {
             init_ok,
             shutdown_noop,
         );
-        let library = LoadedLibrary {
+        let library = ToolLibrary {
             module,
             path: "test-path".to_string(),
             shutdown_called: AtomicBool::new(false),
