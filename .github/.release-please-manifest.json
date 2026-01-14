@@ -1,10 +1,10 @@
 {
   "crates/operai-abi": "0.1.0",
   "crates/operai-embedding": "0.1.0",
-  "crates/operai-macro": "0.1.0",
+  "crates/operai-macro": "0.1.1",
   "crates/operai": "0.1.1",
-  "crates/operai-core": "0.1.0",
-  "crates/operai-runtime": "0.1.0",
-  "crates/operai-build": "0.1.0",
+  "crates/operai-core": "0.1.1",
+  "crates/operai-runtime": "0.1.1",
+  "crates/operai-build": "0.1.1",
   "crates/cargo-operai": "0.1.1"
 }
