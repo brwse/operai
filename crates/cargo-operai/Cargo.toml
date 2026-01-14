@@ -30,11 +30,9 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 
 # Embeddings
-async-openai = { workspace = true }
-fastembed = { workspace = true }
+operai-embedding = { workspace = true }
 
 # Utilities
-walkdir = { workspace = true }
 indicatif = { workspace = true }
 console = { workspace = true }
 axum = { workspace = true }

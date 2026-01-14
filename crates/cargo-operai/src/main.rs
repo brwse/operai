@@ -17,8 +17,6 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 mod commands;
-mod config;
-mod embedding;
 
 #[cfg(test)]
 pub(crate) mod testing {

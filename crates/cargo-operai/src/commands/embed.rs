@@ -6,9 +6,8 @@ use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
+use operai_embedding::{EmbeddingGenerator, write_embedding_file};
 use tracing::info;
-
-use crate::embedding::{EmbeddingGenerator, write_embedding_file};
 
 /// Arguments for the `embed` command.
 #[derive(Args)]

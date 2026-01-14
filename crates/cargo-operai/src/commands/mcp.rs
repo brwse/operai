@@ -5,6 +5,7 @@ use std::{future::Future, net::SocketAddr, path::PathBuf};
 use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
+use operai_embedding::EmbeddingGenerator;
 use operai_runtime::{McpService, RuntimeBuilder, SearchEmbedFuture, SearchEmbedder};
 use rmcp::{
     service::ServiceExt,
@@ -12,8 +13,6 @@ use rmcp::{
 };
 use tokio::signal;
 use tracing::info;
-
-use crate::embedding::EmbeddingGenerator;
 
 /// Arguments for the `mcp` command.
 #[derive(Args)]
