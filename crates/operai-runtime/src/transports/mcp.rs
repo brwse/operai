@@ -2,6 +2,7 @@
 
 use std::{borrow::Cow, sync::Arc};
 
+use futures::future::BoxFuture;
 use operai_core::{ToolInfo, ToolRegistry, policy::session::PolicyStore};
 use rmcp::{
     ErrorData, RoleServer,
@@ -30,12 +31,22 @@ const SEARCH_TOOL_LIST: &str = "list_tool";
 const SEARCH_TOOL_FIND: &str = "find_tool";
 const SEARCH_TOOL_CALL: &str = "call_tool";
 
+/// Async result for embedding a search query.
+pub type SearchEmbedFuture<'a> = BoxFuture<'a, Result<Vec<f32>, String>>;
+
+/// Embeds a search query into a vector representation.
+pub trait SearchEmbedder: Send + Sync {
+    /// Convert a query string into an embedding vector.
+    fn embed_query(&self, query: &str) -> SearchEmbedFuture<'_>;
+}
+
 /// MCP service backed by a local Operai runtime.
 #[derive(Clone)]
 pub struct McpService {
     runtime: LocalRuntime,
     info: ServerInfo,
     search_mode: bool,
+    search_embedder: Option<Arc<dyn SearchEmbedder>>,
 }
 
 impl McpService {
@@ -58,6 +69,7 @@ impl McpService {
             runtime,
             info,
             search_mode: false,
+            search_embedder: None,
         }
     }
 
@@ -65,6 +77,13 @@ impl McpService {
     #[must_use]
     pub fn searchable(mut self, enabled: bool) -> Self {
         self.search_mode = enabled;
+        self
+    }
+
+    /// Sets the search embedder used by searchable mode.
+    #[must_use]
+    pub fn with_search_embedder(mut self, embedder: Arc<dyn SearchEmbedder>) -> Self {
+        self.search_embedder = Some(embedder);
         self
     }
 
@@ -99,7 +118,7 @@ impl McpService {
         config: StreamableHttpServerConfig,
     ) -> StreamableHttpService<Self, LocalSessionManager> {
         let service = self.clone();
-        StreamableHttpService::new(move || Ok(service.clone()), Default::default(), config)
+        StreamableHttpService::new(move || Ok(service.clone()), Arc::default(), config)
     }
 }
 
@@ -132,9 +151,10 @@ impl ServerHandler for McpService {
     ) -> impl std::future::Future<Output = Result<CallToolResult, ErrorData>> + Send + '_ {
         let runtime = self.runtime.clone();
         let search_mode = self.search_mode;
+        let search_embedder = self.search_embedder.clone();
         async move {
             if search_mode {
-                return call_search_mode_tool(request, runtime, context).await;
+                return call_search_mode_tool(request, runtime, context, search_embedder).await;
             }
 
             let tool_name = ensure_runtime_tool_name(&request.name);
@@ -143,10 +163,12 @@ impl ServerHandler for McpService {
                 .map(serde_json::Value::Object)
                 .and_then(|value| json_value_to_struct(&value));
 
-            let mut metadata = CallMetadata::default();
-            metadata.request_id = context.id.to_string();
-            metadata.session_id =
-                extract_session_id_from_extensions(&context.extensions).unwrap_or_default();
+            let metadata = CallMetadata {
+                request_id: context.id.to_string(),
+                session_id: extract_session_id_from_extensions(&context.extensions)
+                    .unwrap_or_default(),
+                ..Default::default()
+            };
 
             let response = runtime
                 .call_tool(
@@ -157,7 +179,7 @@ impl ServerHandler for McpService {
                     metadata,
                 )
                 .await
-                .map_err(status_to_error)?;
+                .map_err(|status| status_to_error(&status))?;
 
             match response.result {
                 Some(call_tool_response::Result::Output(output)) => {
@@ -177,11 +199,13 @@ async fn call_search_mode_tool(
     request: CallToolRequestParam,
     runtime: LocalRuntime,
     context: RequestContext<RoleServer>,
+    search_embedder: Option<Arc<dyn SearchEmbedder>>,
 ) -> Result<CallToolResult, ErrorData> {
-    let mut metadata = CallMetadata::default();
-    metadata.request_id = context.id.to_string();
-    metadata.session_id =
-        extract_session_id_from_extensions(&context.extensions).unwrap_or_default();
+    let metadata = CallMetadata {
+        request_id: context.id.to_string(),
+        session_id: extract_session_id_from_extensions(&context.extensions).unwrap_or_default(),
+        ..Default::default()
+    };
 
     match request.name.as_ref() {
         SEARCH_TOOL_LIST => {
@@ -192,21 +216,30 @@ async fn call_search_mode_tool(
                     page_token: args.page_token.unwrap_or_default(),
                 })
                 .await
-                .map_err(status_to_error)?;
+                .map_err(|status| status_to_error(&status))?;
             Ok(CallToolResult::structured(list_tools_response_to_json(
                 &response,
             )))
         }
         SEARCH_TOOL_FIND => {
             let args = parse_args::<FindArgs>(request.arguments)?;
+            if args.query.trim().is_empty() {
+                return Err(ErrorData::invalid_params("query must be non-empty", None));
+            }
+            let embedder = search_embedder.ok_or_else(|| {
+                ErrorData::invalid_request("search embedder not configured", None)
+            })?;
+            let embedding = embedder.embed_query(&args.query).await.map_err(|err| {
+                ErrorData::internal_error(format!("failed to embed query: {err}"), None)
+            })?;
             let response = runtime
                 .search_tools(SearchToolsRequest {
-                    query_embedding: args.query_embedding,
+                    query_embedding: embedding,
                     page_size: args.page_size.unwrap_or(0),
                     page_token: args.page_token.unwrap_or_default(),
                 })
                 .await
-                .map_err(status_to_error)?;
+                .map_err(|status| status_to_error(&status))?;
             Ok(CallToolResult::structured(search_tools_response_to_json(
                 &response,
             )))
@@ -230,7 +263,7 @@ async fn call_search_mode_tool(
                     metadata,
                 )
                 .await
-                .map_err(status_to_error)?;
+                .map_err(|status| status_to_error(&status))?;
             let value = call_tool_response_to_json(&response);
             match response.result {
                 Some(call_tool_response::Result::Output(_)) => {
@@ -250,9 +283,10 @@ async fn call_search_mode_tool(
 }
 
 fn default_server_info() -> ServerInfo {
-    let mut info = ServerInfo::default();
-    info.capabilities = ServerCapabilities::builder().enable_tools().build();
-    info
+    ServerInfo {
+        capabilities: ServerCapabilities::builder().enable_tools().build(),
+        ..Default::default()
+    }
 }
 
 fn ensure_runtime_tool_name(name: &str) -> String {
@@ -331,15 +365,14 @@ fn search_mode_find_tool() -> Tool {
     Tool {
         name: Cow::Borrowed(SEARCH_TOOL_FIND),
         title: Some("Find tools".to_string()),
-        description: Some(Cow::Borrowed("Search tools using a query embedding.")),
+        description: Some(Cow::Borrowed("Search tools using a query string.")),
         input_schema: Arc::new(schema_to_object_value(serde_json::json!({
             "type": "object",
-            "description": "Search tools by semantic similarity. Use this when you have an embedding for the user request and want the most relevant tools.",
+            "description": "Search tools by semantic similarity. Provide a plain-language query and the server will embed it.",
             "properties": {
-                "query_embedding": {
-                    "type": "array",
-                    "description": "Embedding vector for the query. Must be produced by the same model used to embed tools.",
-                    "items": { "type": "number" }
+                "query": {
+                    "type": "string",
+                    "description": "Search query text describing what you want to do."
                 },
                 "page_size": {
                     "type": "integer",
@@ -351,7 +384,7 @@ fn search_mode_find_tool() -> Tool {
                     "description": "Token from a previous search response to fetch the next page."
                 }
             },
-            "required": ["query_embedding"],
+            "required": ["query"],
             "additionalProperties": false
         }))),
         output_schema: Some(Arc::new(schema_to_object_value(serde_json::json!({
@@ -536,8 +569,7 @@ fn search_tools_response_to_json(
             let tool = result
                 .tool
                 .as_ref()
-                .map(proto_tool_to_json)
-                .unwrap_or(serde_json::Value::Null);
+                .map_or(serde_json::Value::Null, proto_tool_to_json);
             serde_json::json!({
                 "tool": tool,
                 "relevance_score": result.relevance_score
@@ -566,13 +598,11 @@ fn proto_tool_to_json(tool: &crate::proto::Tool) -> serde_json::Value {
     let input_schema = tool
         .input_schema
         .as_ref()
-        .map(struct_to_json_value)
-        .unwrap_or(serde_json::Value::Null);
+        .map_or(serde_json::Value::Null, struct_to_json_value);
     let output_schema = tool
         .output_schema
         .as_ref()
-        .map(struct_to_json_value)
-        .unwrap_or(serde_json::Value::Null);
+        .map_or(serde_json::Value::Null, struct_to_json_value);
 
     serde_json::json!({
         "name": tool.name,
@@ -586,7 +616,7 @@ fn proto_tool_to_json(tool: &crate::proto::Tool) -> serde_json::Value {
     })
 }
 
-fn status_to_error(status: tonic::Status) -> ErrorData {
+fn status_to_error(status: &tonic::Status) -> ErrorData {
     let message = status.message().to_string();
     match status.code() {
         Code::NotFound => ErrorData::resource_not_found(message, None),
@@ -602,7 +632,7 @@ fn extract_session_id_from_extensions(extensions: &Extensions) -> Option<String>
         .headers
         .get(HEADER_SESSION_ID)
         .and_then(|value| value.to_str().ok())
-        .map(|value| value.to_string())
+        .map(ToString::to_string)
 }
 
 #[derive(Debug, serde::Deserialize, Default)]
@@ -613,7 +643,7 @@ struct ListArgs {
 
 #[derive(Debug, serde::Deserialize)]
 struct FindArgs {
-    query_embedding: Vec<f32>,
+    query: String,
     page_size: Option<i32>,
     page_token: Option<String>,
 }
@@ -661,6 +691,14 @@ mod tests {
     use tokio::sync::oneshot;
 
     use super::*;
+
+    struct TestEmbedder;
+
+    impl SearchEmbedder for TestEmbedder {
+        fn embed_query(&self, _query: &str) -> SearchEmbedFuture<'_> {
+            Box::pin(async { Ok(vec![1.0, 0.0]) })
+        }
+    }
 
     #[test]
     fn test_extract_session_id_from_extensions() {
@@ -768,6 +806,7 @@ mod tests {
 
         let service = McpService::from_runtime(runtime)
             .searchable(true)
+            .with_search_embedder(Arc::new(TestEmbedder))
             .streamable_http_service();
         let router = axum::Router::new().nest_service("/mcp", service);
 
@@ -787,7 +826,7 @@ mod tests {
 
         let tools = client.list_all_tools().await?;
         let mut names: Vec<_> = tools.iter().map(|tool| tool.name.as_ref()).collect();
-        names.sort();
+        names.sort_unstable();
         assert_eq!(
             names,
             vec![SEARCH_TOOL_CALL, SEARCH_TOOL_FIND, SEARCH_TOOL_LIST]
@@ -814,7 +853,7 @@ mod tests {
         );
 
         let find_args = json_object(serde_json::json!({
-            "query_embedding": [1.0, 0.0],
+            "query": "echo",
             "page_size": 5
         }));
         let find_result = client

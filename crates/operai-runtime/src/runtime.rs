@@ -41,6 +41,10 @@ pub enum Runtime {
 
 impl Runtime {
     /// Lists tools from the configured runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying runtime fails to list tools.
     pub async fn list_tools(&self, request: ListToolsRequest) -> Result<ListToolsResponse, Status> {
         match self {
             Self::Local(runtime) => runtime.list_tools(request).await,
@@ -49,6 +53,11 @@ impl Runtime {
     }
 
     /// Searches tools from the configured runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the search request is invalid or the runtime fails
+    /// to search.
     pub async fn search_tools(
         &self,
         request: SearchToolsRequest,
@@ -60,6 +69,11 @@ impl Runtime {
     }
 
     /// Calls a tool on the configured runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tool cannot be invoked or the runtime fails to
+    /// process the call.
     pub async fn call_tool(
         &self,
         request: CallToolRequest,
@@ -125,6 +139,10 @@ impl LocalRuntime {
     }
 
     /// Lists tools from the local registry.
+    ///
+    /// # Errors
+    ///
+    /// This method currently never returns an error.
     pub async fn list_tools(&self, request: ListToolsRequest) -> Result<ListToolsResponse, Status> {
         let page_size: usize = if request.page_size <= 0 {
             100
@@ -158,6 +176,10 @@ impl LocalRuntime {
     }
 
     /// Searches tools from the local registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query embedding is missing or invalid.
     pub async fn search_tools(
         &self,
         request: SearchToolsRequest,
@@ -200,6 +222,11 @@ impl LocalRuntime {
     }
 
     /// Calls a tool via the local registry and policy engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tool name is invalid, the tool is missing,
+    /// policy evaluation fails, or the tool execution fails.
     pub async fn call_tool(
         &self,
         request: CallToolRequest,
@@ -321,6 +348,10 @@ pub struct RemoteRuntime {
 
 impl RemoteRuntime {
     /// Connects to a remote runtime at the given endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the endpoint is invalid or the connection fails.
     pub async fn connect(endpoint: impl AsRef<str>) -> Result<Self, tonic::transport::Error> {
         let endpoint = normalize_endpoint(endpoint.as_ref());
         let client = ToolboxClient::connect(endpoint).await?;
@@ -334,12 +365,20 @@ impl RemoteRuntime {
     }
 
     /// Lists tools from the remote runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the remote runtime returns a non-success status.
     pub async fn list_tools(&self, request: ListToolsRequest) -> Result<ListToolsResponse, Status> {
         let response = self.client.clone().list_tools(request).await?.into_inner();
         Ok(response)
     }
 
     /// Searches tools from the remote runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the remote runtime returns a non-success status.
     pub async fn search_tools(
         &self,
         request: SearchToolsRequest,
@@ -354,6 +393,11 @@ impl RemoteRuntime {
     }
 
     /// Calls a tool on the remote runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the metadata cannot be applied or the remote call
+    /// fails.
     pub async fn call_tool(
         &self,
         request: CallToolRequest,

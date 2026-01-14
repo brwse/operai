@@ -22,4 +22,4 @@ pub use builder::RuntimeBuilder;
 pub use runtime::{CallMetadata, LocalRuntime, RemoteRuntime, Runtime};
 pub use transports::grpc::ToolboxService;
 #[cfg(feature = "mcp")]
-pub use transports::mcp::McpService;
+pub use transports::mcp::{McpService, SearchEmbedFuture, SearchEmbedder};

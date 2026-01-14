@@ -101,6 +101,7 @@ async fn main() -> Result<()> {
             EnvFilter::from_default_env()
                 .add_directive("info".parse().context("failed to parse log directive")?),
         )
+        .with_writer(std::io::stderr)
         .init();
 
     let Cargo::Operai(args) = Cargo::parse();

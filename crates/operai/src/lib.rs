@@ -145,6 +145,17 @@ macro_rules! generate_tool_entrypoint {
                 async_ffi::{FfiFuture, FutureExt},
             };
 
+            #[cfg(operai_embedding)]
+            mod __operai_embedding {
+                include!(concat!(env!("OUT_DIR"), "/embedding.rs"));
+            }
+
+            #[cfg(operai_embedding)]
+            use __operai_embedding::EMBEDDING;
+
+            #[cfg(not(operai_embedding))]
+            const EMBEDDING: &[f32] = &[];
+
             static DESCRIPTORS: OnceLock<Vec<abi::ToolDescriptor>> = OnceLock::new();
             static CAPABILITIES: OnceLock<Vec<Vec<RStr<'static>>>> = OnceLock::new();
             static TAGS: OnceLock<Vec<Vec<RStr<'static>>>> = OnceLock::new();
@@ -202,7 +213,7 @@ macro_rules! generate_tool_entrypoint {
                                 },
                                 capabilities: RSlice::from_slice(&capabilities[i]),
                                 tags: RSlice::from_slice(&tags[i]),
-                                embedding: RSlice::from_slice(&[]),
+                                embedding: RSlice::from_slice(EMBEDDING),
                             }
                         })
                         .collect()

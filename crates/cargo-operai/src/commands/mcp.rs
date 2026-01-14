@@ -5,10 +5,15 @@ use std::{future::Future, net::SocketAddr, path::PathBuf};
 use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
-use operai_runtime::{McpService, RuntimeBuilder};
-use rmcp::{service::ServiceExt, transport::stdio};
+use operai_runtime::{McpService, RuntimeBuilder, SearchEmbedFuture, SearchEmbedder};
+use rmcp::{
+    service::ServiceExt,
+    transport::{stdio, streamable_http_server::StreamableHttpServerConfig},
+};
 use tokio::signal;
 use tracing::info;
+
+use crate::embedding::EmbeddingGenerator;
 
 /// Arguments for the `mcp` command.
 #[derive(Args)]
@@ -57,8 +62,14 @@ where
         .await
         .context("failed to initialize runtime")?;
 
+    let search_embedder = if args.searchable {
+        Some(build_search_embedder().context("failed to initialize search embedder")?)
+    } else {
+        None
+    };
+
     if args.stdio {
-        run_stdio(local_runtime, args.searchable).await?;
+        run_stdio(local_runtime, args.searchable, search_embedder).await?;
         return Ok(());
     }
 
@@ -75,9 +86,16 @@ where
         .with_context(|| format!("invalid --addr value: {}", args.addr))?;
     let path = normalize_path(&args.path);
 
-    let service = McpService::from_runtime(local_runtime.clone())
-        .searchable(args.searchable)
-        .streamable_http_service();
+    let mut service = McpService::from_runtime(local_runtime.clone()).searchable(args.searchable);
+    if let Some(embedder) = search_embedder {
+        service = service.with_search_embedder(embedder);
+    }
+    let service = service.streamable_http_service_with_config(StreamableHttpServerConfig {
+        // Stateless mode keeps compatibility with MCP clients that don't send
+        // the initialized notification after initialize.
+        stateful_mode: false,
+        ..Default::default()
+    });
     let router = axum::Router::new().nest_service(path.as_str(), service);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -105,7 +123,39 @@ where
     Ok(())
 }
 
-async fn run_stdio(runtime: operai_runtime::LocalRuntime, searchable: bool) -> Result<()> {
+struct CliSearchEmbedder {
+    generator: tokio::sync::Mutex<EmbeddingGenerator>,
+}
+
+impl CliSearchEmbedder {
+    fn new(generator: EmbeddingGenerator) -> Self {
+        Self {
+            generator: tokio::sync::Mutex::new(generator),
+        }
+    }
+}
+
+impl SearchEmbedder for CliSearchEmbedder {
+    fn embed_query(&self, query: &str) -> SearchEmbedFuture<'_> {
+        let query = query.to_string();
+        let generator = &self.generator;
+        Box::pin(async move {
+            let mut guard = generator.lock().await;
+            guard.embed(&query).await.map_err(|err| err.to_string())
+        })
+    }
+}
+
+fn build_search_embedder() -> Result<std::sync::Arc<dyn SearchEmbedder>> {
+    let generator = EmbeddingGenerator::from_config(None, None)?;
+    Ok(std::sync::Arc::new(CliSearchEmbedder::new(generator)))
+}
+
+async fn run_stdio(
+    runtime: operai_runtime::LocalRuntime,
+    searchable: bool,
+    search_embedder: Option<std::sync::Arc<dyn SearchEmbedder>>,
+) -> Result<()> {
     eprintln!("{} Starting MCP stdio server...", style("→").cyan());
     eprintln!(
         "{} Loaded {} tool(s)",
@@ -113,7 +163,10 @@ async fn run_stdio(runtime: operai_runtime::LocalRuntime, searchable: bool) -> R
         runtime.registry().len()
     );
 
-    let service = McpService::from_runtime(runtime.clone()).searchable(searchable);
+    let mut service = McpService::from_runtime(runtime.clone()).searchable(searchable);
+    if let Some(embedder) = search_embedder {
+        service = service.with_search_embedder(embedder);
+    }
     let (stdin, stdout) = stdio();
 
     let running = service

@@ -6,6 +6,8 @@ use std::{env, fs, path::Path};
 ///
 /// This currently handles embedding generation from `.brwse-embedding`.
 pub fn setup() {
+    println!("cargo:rustc-check-cfg=cfg(operai_embedding)");
+    println!("cargo:rustc-cfg=operai_embedding");
     println!("cargo:rerun-if-changed=.brwse-embedding");
 
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
@@ -33,6 +35,7 @@ pub fn setup() {
 pub const EMBEDDING: &[f32] = &[{array_content}];
 
 /// Embedding dimension.
+#[allow(dead_code)]
 pub const EMBEDDING_DIM: usize = {dim};
 "#
         )
@@ -41,6 +44,7 @@ pub const EMBEDDING_DIM: usize = {dim};
 pub const EMBEDDING: &[f32] = &[];
 
 /// Embedding dimension.
+#[allow(dead_code)]
 pub const EMBEDDING_DIM: usize = 0;
 "#
         .to_string()

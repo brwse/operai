@@ -21,6 +21,7 @@ publish = false
 
 [workspace.lints.rust]
 unsafe_code = "allow"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(operai_embedding)"] }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

@@ -1,6 +1,7 @@
 //! Runtime builder for local or remote execution.
 
 use std::{
+    fmt,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -37,13 +38,28 @@ enum RuntimeMode {
 }
 
 /// Configures and builds a runtime.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RuntimeBuilder {
     manifest_path: PathBuf,
     runtime_ctx: RuntimeContext,
     mode: RuntimeMode,
     #[cfg(feature = "static-link")]
     static_tools: Vec<ToolModuleRef>,
+}
+
+impl fmt::Debug for RuntimeBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug_struct = f.debug_struct("RuntimeBuilder");
+        debug_struct
+            .field("manifest_path", &self.manifest_path)
+            .field("runtime_ctx", &self.runtime_ctx)
+            .field("mode", &self.mode);
+        #[cfg(feature = "static-link")]
+        {
+            debug_struct.field("static_tools", &self.static_tools.len());
+        }
+        debug_struct.finish()
+    }
 }
 
 impl RuntimeBuilder {
@@ -74,11 +90,20 @@ impl RuntimeBuilder {
     }
 
     /// Builds a local runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the manifest cannot be loaded or parsed.
     pub async fn build_local(self) -> Result<LocalRuntime, RuntimeBuildError> {
         build_local_runtime(self).await
     }
 
     /// Builds a remote runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no remote endpoint is configured or the connection
+    /// fails.
     pub async fn build_remote(self) -> Result<RemoteRuntime, RuntimeBuildError> {
         let endpoint = match self.mode {
             RuntimeMode::Remote { endpoint } => endpoint,
@@ -90,6 +115,11 @@ impl RuntimeBuilder {
     }
 
     /// Builds the runtime based on the configured mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if manifest loading fails for local mode or the remote
+    /// connection fails.
     pub async fn build(self) -> Result<Runtime, RuntimeBuildError> {
         match self.mode.clone() {
             RuntimeMode::Local => Ok(Runtime::Local(build_local_runtime(self).await?)),
