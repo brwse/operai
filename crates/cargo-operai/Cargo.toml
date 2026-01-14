@@ -37,9 +37,10 @@ fastembed = { workspace = true }
 walkdir = { workspace = true }
 indicatif = { workspace = true }
 console = { workspace = true }
+axum = { workspace = true }
 
 # Server
-operai-runtime = { workspace = true }
+operai-runtime = { workspace = true, features = ["mcp"] }
 operai-core = { workspace = true }
 operai-abi = { workspace = true }
 tonic = { workspace = true }
@@ -48,6 +49,7 @@ tonic-reflection = { workspace = true }
 dirs = "6.0.0"
 base64.workspace = true
 prost-types.workspace = true
+rmcp = { workspace = true, features = ["transport-io"] }
 
 [lints]
 workspace = true

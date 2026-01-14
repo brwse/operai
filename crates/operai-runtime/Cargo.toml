@@ -16,6 +16,7 @@ path = "src/lib.rs"
 
 [features]
 static-link = []
+mcp = ["rmcp", "http"]
 
 [lints]
 workspace = true
@@ -46,8 +47,14 @@ rkyv = { workspace = true }
 # Encoding
 base64 = { workspace = true }
 
+# MCP
+rmcp = { workspace = true, optional = true, features = ["server", "transport-streamable-http-server"] }
+http = { workspace = true, optional = true }
+
 # Tracing
 tracing = { workspace = true }
 thiserror = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
+rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
+axum = { workspace = true }

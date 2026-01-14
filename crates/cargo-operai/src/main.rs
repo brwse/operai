@@ -6,6 +6,7 @@
 //! cargo operai embed              # Generate embeddings
 //! cargo operai build              # Build with embeddings
 //! cargo operai serve              # Run local dev server
+//! cargo operai mcp                # Run MCP server
 //! cargo operai call <tool> <json> # Test a tool
 //! cargo operai list               # List available tools
 //! cargo operai describe <tool>    # Show tool details
@@ -21,20 +22,18 @@ mod embedding;
 
 #[cfg(test)]
 pub(crate) mod testing {
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::OnceLock;
 
-    use tokio::sync::Mutex as AsyncMutex;
+    use tokio::sync::Mutex;
 
-    pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    pub(crate) fn test_lock() -> tokio::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        LOCK.get_or_init(|| Mutex::new(())).blocking_lock()
     }
 
     pub(crate) async fn test_lock_async() -> tokio::sync::MutexGuard<'static, ()> {
-        static ASYNC_LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
-        ASYNC_LOCK.get_or_init(|| AsyncMutex::new(())).lock().await
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().await
     }
 }
 
@@ -67,6 +66,9 @@ enum Command {
     /// Serve tools locally for development
     Serve(commands::serve::ServeArgs),
 
+    /// Serve tools over MCP
+    Mcp(commands::mcp::McpArgs),
+
     /// Call a tool for testing
     Call(commands::call::CallArgs),
 
@@ -84,6 +86,7 @@ impl std::fmt::Debug for Command {
             Self::Embed(_) => f.debug_tuple("Embed").finish(),
             Self::Build(_) => f.debug_tuple("Build").finish(),
             Self::Serve(_) => f.debug_tuple("Serve").finish(),
+            Self::Mcp(_) => f.debug_tuple("Mcp").finish(),
             Self::Call(_) => f.debug_tuple("Call").finish(),
             Self::List(_) => f.debug_tuple("List").finish(),
             Self::Describe(_) => f.debug_tuple("Describe").finish(),
@@ -107,6 +110,7 @@ async fn main() -> Result<()> {
         Command::Embed(args) => commands::embed::run(args).await,
         Command::Build(args) => commands::build::run(args).await,
         Command::Serve(args) => commands::serve::run(args).await,
+        Command::Mcp(args) => commands::mcp::run(args).await,
         Command::Call(args) => commands::call::run(args).await,
         Command::List(args) => commands::list::run(args).await,
         Command::Describe(args) => commands::describe::run(args).await,
@@ -183,6 +187,19 @@ mod tests {
         let err = Cargo::try_parse_from(["cargo", "operai", "call", "tool.id"])
             .expect_err("expected clap parse error");
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn test_cli_mcp_defaults() -> Result<(), clap::Error> {
+        let command = parse_command(&["cargo", "operai", "mcp"])?;
+
+        let Command::Mcp(args) = command else {
+            panic!("expected Command::Mcp");
+        };
+
+        assert_eq!(args.addr, "127.0.0.1:3333");
+        assert_eq!(args.path, "/mcp");
+        Ok(())
     }
 
     #[test]

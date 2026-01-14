@@ -148,7 +148,7 @@ mod tests {
     use super::*;
     use crate::testing;
 
-    fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    fn test_lock() -> tokio::sync::MutexGuard<'static, ()> {
         testing::test_lock()
     }
 

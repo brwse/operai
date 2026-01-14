@@ -5,5 +5,6 @@ pub mod call;
 pub mod describe;
 pub mod embed;
 pub mod list;
+pub mod mcp;
 pub mod new;
 pub mod serve;

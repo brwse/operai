@@ -18,8 +18,8 @@ pub mod builder;
 pub mod runtime;
 pub mod transports;
 
-pub mod bench_helpers;
-
 pub use builder::RuntimeBuilder;
 pub use runtime::{CallMetadata, LocalRuntime, RemoteRuntime, Runtime};
 pub use transports::grpc::ToolboxService;
+#[cfg(feature = "mcp")]
+pub use transports::mcp::McpService;
