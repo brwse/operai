@@ -543,16 +543,15 @@ name = "cargo-operai"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-openai",
  "axum",
  "base64 0.22.1",
  "clap",
  "console 0.16.2",
  "dirs",
- "fastembed",
  "indicatif 0.18.3",
  "operai-abi",
  "operai-core",
+ "operai-embedding",
  "operai-runtime",
  "prost-types",
  "rmcp",
@@ -565,7 +564,6 @@ dependencies = [
  "tonic-reflection",
  "tracing",
  "tracing-subscriber",
- "walkdir",
 ]
 
 [[package]]
@@ -1989,9 +1987,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lzma-rust2"
-version = "0.15.6"
+version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17f7337d278fec032975dc884152491580dd23750ee957047856735fe0e61ede"
+checksum = "1670343e58806300d87950e3401e820b519b9384281bbabfb15e3636689ffd69"
 
 [[package]]
 name = "macro_rules_attribute"
@@ -2422,6 +2420,21 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "operai-embedding"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-openai",
+ "fastembed",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "walkdir",
 ]
 
 [[package]]
@@ -3132,9 +3145,9 @@ dependencies = [
 
 [[package]]
 name = "rkyv"
-version = "0.8.13"
+version = "0.8.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b2e88acca7157d83d789836a3987dafc12bc3d88a050e54b8fe9ea4aaa29d20"
+checksum = "360b333c61ae24e5af3ae7c8660bd6b21ccd8200dbbc5d33c2454421e85b9c69"
 dependencies = [
  "bytecheck",
  "bytes",
@@ -3151,9 +3164,9 @@ dependencies = [
 
 [[package]]
 name = "rkyv_derive"
-version = "0.8.13"
+version = "0.8.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f6dffea3c91fa91a3c0fc8a061b0e27fef25c6304728038a6d6bcb1c58ba9bd"
+checksum = "7c02f8cdd12b307ab69fe0acf4cd2249c7460eb89dce64a0febadf934ebb6a9e"
 dependencies = [
  "proc-macro2",
  "quote",

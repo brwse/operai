@@ -1,1 +1,9 @@
 target
+node_modules
+dist
+.venv
+*.egg-info
+__pycache__
+*.so
+*.node
+.turbo
