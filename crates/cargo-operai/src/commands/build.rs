@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
-use operai_embedding::{EmbeddingGenerator, write_embedding_file};
+use crate::embedding::{EmbeddingGenerator, write_embedding_file};
 use tracing::info;
 
 /// Command-line arguments for the build command.
@@ -39,20 +39,6 @@ pub struct BuildArgs {
     #[arg(long)]
     pub skip_embed: bool,
 
-    /// Embedding provider to use.
-    ///
-    /// Specifies which embedding service to use (e.g., "fastembed", "openai").
-    /// If not specified, uses the default provider from the embedding configuration.
-    #[arg(short = 'P', long)]
-    pub provider: Option<String>,
-
-    /// Embedding model to use.
-    ///
-    /// Specifies which model to use for generating embeddings.
-    /// If not specified, uses the default model for the selected provider.
-    #[arg(short, long)]
-    pub model: Option<String>,
-
     /// Additional arguments to pass to `cargo build`.
     ///
     /// These arguments are passed through directly to cargo and can be used to
@@ -66,13 +52,18 @@ pub struct BuildArgs {
 /// This is the main entry point for the `cargo operai build` command.
 /// It delegates to `run_with` with "cargo" as the program.
 ///
+/// # Arguments
+///
+/// * `args` - Command-line arguments for the build command
+/// * `config` - Operai project config
+///
 /// # Errors
 ///
 /// Returns an error if:
 /// - The cargo build process fails to execute
 /// - The cargo build command returns a non-zero exit code
-pub async fn run(args: &BuildArgs) -> Result<()> {
-    run_with(args, "cargo").await
+pub async fn run(args: &BuildArgs, config: &operai_core::Config) -> Result<()> {
+    run_with(args, "cargo", config).await
 }
 
 /// Runs the build command with a custom cargo program.
@@ -82,7 +73,8 @@ pub async fn run(args: &BuildArgs) -> Result<()> {
 ///
 /// 1. Determines the crate path (defaults to current directory if not specified)
 /// 2. If `skip_embed` is false, attempts to generate an embedding:
-///    - Creates an `EmbeddingGenerator` with the specified provider and model
+///    - Uses the provided config to get embedding settings
+///    - Creates an `EmbeddingGenerator` from the config
 ///    - Generates an embedding for the crate
 ///    - Writes the embedding to `.brwse-embedding` in the crate directory
 ///    - Embedding failures are logged but do not stop the build
@@ -93,12 +85,18 @@ pub async fn run(args: &BuildArgs) -> Result<()> {
 ///
 /// * `P` - A type that can be converted to an OS string (e.g., `&str`, `PathBuf`)
 ///
+/// # Arguments
+///
+/// * `args` - Command-line arguments for the build command
+/// * `cargo_program` - Path to the cargo executable (for testing)
+/// * `config` - Operai project config
+///
 /// # Errors
 ///
 /// Returns an error if:
 /// - The cargo program cannot be executed
 /// - The cargo build command returns a non-zero exit code
-async fn run_with<P>(args: &BuildArgs, cargo_program: P) -> Result<()>
+async fn run_with<P>(args: &BuildArgs, cargo_program: P, config: &operai_core::Config) -> Result<()>
 where
     P: AsRef<OsStr>,
 {
@@ -115,8 +113,7 @@ where
                 anyhow::bail!("no Cargo.toml found in: {}", crate_path.display());
             }
 
-            let generator =
-                EmbeddingGenerator::from_config(args.provider.as_deref(), args.model.as_deref())?;
+            let generator = EmbeddingGenerator::from_config(config)?;
 
             let pb = ProgressBar::new_spinner();
             pb.set_style(
@@ -308,6 +305,11 @@ mod tests {
             .collect())
     }
 
+    /// Creates an empty config for testing.
+    fn test_config() -> operai_core::Config {
+        operai_core::Config::empty()
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn test_run_skips_embedding_when_skip_embed_true() -> anyhow::Result<()> {
         // Arrange
@@ -322,13 +324,11 @@ mod tests {
         let args = BuildArgs {
             path: Some(crate_dir.clone()),
             skip_embed: true,
-            provider: None,
-            model: None,
             cargo_args: vec!["--features".to_owned(), "foo".to_owned()],
         };
 
         // Act
-        run_with(&args, cargo_path).await?;
+        run_with(&args, cargo_path, &test_config()).await?;
 
         // Assert
         let cargo_args = read_lines(&crate_dir.join("cargo_args.txt"))?;
@@ -358,19 +358,22 @@ mod tests {
             crate_dir.join("Cargo.toml"),
             "[package]\nname = \"test\"\nversion = \"0.1.0\"\n",
         )?;
+        // Create an operai.toml with invalid embedding config to trigger embedding failure
+        fs::write(
+            crate_dir.join("operai.toml"),
+            "[embeddings]\ntype = \"invalid-type-that-does-not-exist\"\nmodel = \"some-model\"\n",
+        )?;
 
         let cargo_path = install_fake_cargo(&bin_dir, 0)?;
 
         let args = BuildArgs {
             path: Some(crate_dir.clone()),
             skip_embed: false,
-            provider: Some("invalid-provider-that-does-not-exist".to_owned()),
-            model: Some("some-model".to_owned()),
             cargo_args: Vec::new(),
         };
 
         // Act - embedding will fail but cargo build should succeed
-        run_with(&args, cargo_path).await?;
+        run_with(&args, cargo_path, &test_config()).await?;
 
         // Assert
         let cargo_args = read_lines(&crate_dir.join("cargo_args.txt"))?;
@@ -393,13 +396,11 @@ mod tests {
         let args = BuildArgs {
             path: Some(crate_dir),
             skip_embed: true,
-            provider: None,
-            model: None,
             cargo_args: Vec::new(),
         };
 
         // Act
-        let error = run_with(&args, cargo_path)
+        let error = run_with(&args, cargo_path, &test_config())
             .await
             .expect_err("expected cargo build failure");
 
@@ -421,14 +422,12 @@ mod tests {
         let args = BuildArgs {
             path: Some(crate_dir),
             skip_embed: true,
-            provider: None,
-            model: None,
             cargo_args: Vec::new(),
         };
 
         // Act
         let missing_cargo_path = temp.path().join("missing-cargo");
-        let error = run_with(&args, missing_cargo_path)
+        let error = run_with(&args, missing_cargo_path, &test_config())
             .await
             .expect_err("expected cargo to be missing");
 
@@ -452,13 +451,11 @@ mod tests {
         let args = BuildArgs {
             path: Some(crate_dir.clone()),
             skip_embed: true,
-            provider: None,
-            model: None,
             cargo_args: Vec::new(),
         };
 
         // Act
-        run_with(&args, cargo_path).await?;
+        run_with(&args, cargo_path, &test_config()).await?;
 
         // Assert - verify cargo was run in the crate directory
         let cargo_cwd = fs::read_to_string(crate_dir.join("cargo_cwd.txt"))?;
@@ -492,13 +489,11 @@ mod tests {
         let args = BuildArgs {
             path: None, // Should default to current directory
             skip_embed: true,
-            provider: None,
-            model: None,
             cargo_args: Vec::new(),
         };
 
         // Act
-        run_with(&args, cargo_path).await?;
+        run_with(&args, cargo_path, &test_config()).await?;
 
         // Assert - verify cargo was run in temp.path() (the "current directory")
         let cargo_cwd = fs::read_to_string(temp.path().join("cargo_cwd.txt"))?;

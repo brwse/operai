@@ -28,6 +28,7 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 mod commands;
+mod embedding;
 
 #[cfg(test)]
 pub(crate) mod testing {
@@ -134,13 +135,14 @@ impl std::fmt::Debug for Command {
 
 /// Entry point for the `cargo operai` CLI.
 ///
-/// Initializes structured logging and dispatches to the appropriate command
-/// handler based on the parsed CLI arguments.
+/// Initializes structured logging, loads the project config, and dispatches to
+/// the appropriate command handler based on the parsed CLI arguments.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - Logging initialization fails
+/// - Config loading fails
 /// - Command execution fails
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -154,11 +156,15 @@ async fn main() -> Result<()> {
 
     let Cargo::Operai(args) = Cargo::parse();
 
+    // Load project config once to share across subcommands
+    let config = operai_core::Config::load("operai.toml")
+        .unwrap_or_else(|_| operai_core::Config::empty());
+
     match &args.command {
         Command::New(args) => commands::new::run(args),
-        Command::Build(args) => commands::build::run(args).await,
+        Command::Build(args) => commands::build::run(args, &config).await,
         Command::Serve(args) => commands::serve::run(args).await,
-        Command::Mcp(args) => commands::mcp::run(args).await,
+        Command::Mcp(args) => commands::mcp::run(args, &config).await,
         Command::Call(args) => commands::call::run(args).await,
         Command::List(args) => commands::list::run(args).await,
         Command::Describe(args) => commands::describe::run(args).await,
@@ -306,7 +312,7 @@ mod tests {
             panic!("expected Command::Serve");
         };
 
-        assert!(args.manifest.is_none());
+        assert!(args.config.is_none());
         assert_eq!(args.port, 50051);
         Ok(())
     }
@@ -332,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_build_parses_path_skip_embed_provider_and_model() -> Result<(), clap::Error> {
+    fn test_cli_build_parses_path_and_skip_embed() -> Result<(), clap::Error> {
         let command = parse_command(&[
             "cargo",
             "operai",
@@ -340,10 +346,6 @@ mod tests {
             "--path",
             "my-crate",
             "--skip-embed",
-            "-P",
-            "fastembed",
-            "--model",
-            "nomic-embed-text-v1.5",
         ])?;
 
         let Command::Build(args) = command else {
@@ -352,8 +354,6 @@ mod tests {
 
         assert_eq!(args.path, Some(std::path::PathBuf::from("my-crate")));
         assert!(args.skip_embed);
-        assert_eq!(args.provider.as_deref(), Some("fastembed"));
-        assert_eq!(args.model.as_deref(), Some("nomic-embed-text-v1.5"));
         assert!(args.cargo_args.is_empty());
         Ok(())
     }

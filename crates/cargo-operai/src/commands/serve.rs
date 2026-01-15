@@ -1,7 +1,7 @@
 //! Local gRPC server for serving Operai toolbox tools.
 //!
 //! This module provides functionality to run a local gRPC server that exposes
-//! tools defined in an Operai manifest. The server supports gRPC reflection,
+//! tools defined in an Operai config. The server supports gRPC reflection,
 //! health checks, and graceful shutdown.
 
 use std::{net::SocketAddr, path::PathBuf};
@@ -18,9 +18,9 @@ use tracing::info;
 /// Command-line arguments for the serve command.
 #[derive(Args)]
 pub struct ServeArgs {
-    /// Path to the Operai manifest file (defaults to `operai.toml`).
+    /// Path to the Operai project config file (defaults to `operai.toml`).
     #[arg(short, long)]
-    pub manifest: Option<PathBuf>,
+    pub config: Option<PathBuf>,
     /// Port to listen on (defaults to 50051).
     #[arg(short, long, default_value = "50051")]
     pub port: u16,
@@ -28,8 +28,9 @@ pub struct ServeArgs {
 
 /// Runs the gRPC server, listening for Ctrl+C to trigger graceful shutdown.
 ///
-/// This is the main entry point for the serve command. It initializes the runtime
-/// from the manifest and starts a gRPC server with health checks and reflection.
+/// This is the main entry point for the serve command. It initializes the
+/// runtime from the config and starts a gRPC server with health checks and
+/// reflection.
 pub async fn run(args: &ServeArgs) -> Result<()> {
     let shutdown = async {
         let _ = signal::ctrl_c().await;
@@ -42,13 +43,13 @@ pub async fn run(args: &ServeArgs) -> Result<()> {
 ///
 /// # Arguments
 ///
-/// * `args` - Configuration for the server (manifest path and port)
+/// * `args` - Configuration for the server (config path and port)
 /// * `shutdown` - A future that completes when shutdown should occur
 ///
 /// # Behavior
 ///
 /// The server will:
-/// 1. Load tools from the manifest (or `operai.toml` if not specified)
+/// 1. Load tools from the config (or `operai.toml` if not specified)
 /// 2. Start a gRPC server on the specified port (default 50051)
 /// 3. Expose the toolbox service, health checks, and gRPC reflection
 /// 4. Wait for the shutdown future to complete
@@ -59,13 +60,13 @@ where
 {
     println!("{} Starting local toolbox server...", style("→").cyan());
 
-    let manifest_path = args
-        .manifest
+    let config_path = args
+        .config
         .clone()
         .unwrap_or_else(|| PathBuf::from("operai.toml"));
 
     let local_runtime = RuntimeBuilder::new()
-        .with_manifest_path(manifest_path)
+        .with_config_path(config_path)
         .build_local()
         .await
         .context("failed to initialize runtime")?;
@@ -142,7 +143,7 @@ mod tests {
     use super::*;
 
     static HELLO_WORLD_CDYLIB_PATH: OnceLock<PathBuf> = OnceLock::new();
-    static TEMP_MANIFEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+    static TEMP_CONFIG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[derive(Parser)]
     struct ServeArgsCli {
@@ -154,24 +155,24 @@ mod tests {
     fn test_serve_args_defaults_port_to_50051() {
         let cli = ServeArgsCli::try_parse_from(["test"]).expect("args should parse");
         assert_eq!(cli.serve.port, 50051);
-        assert_eq!(cli.serve.manifest, None);
+        assert_eq!(cli.serve.config, None);
     }
 
     #[test]
-    fn test_serve_args_parses_manifest_and_port_flags() {
+    fn test_serve_args_parses_config_and_port_flags() {
         let cli =
-            ServeArgsCli::try_parse_from(["test", "--manifest", "custom.toml", "--port", "123"])
+            ServeArgsCli::try_parse_from(["test", "--config", "custom.toml", "--port", "123"])
                 .expect("args should parse");
         assert_eq!(cli.serve.port, 123);
-        assert_eq!(cli.serve.manifest, Some(PathBuf::from("custom.toml")));
+        assert_eq!(cli.serve.config, Some(PathBuf::from("custom.toml")));
     }
 
     #[test]
     fn test_serve_args_parses_short_flags() {
-        let cli = ServeArgsCli::try_parse_from(["test", "-m", "short.toml", "-p", "8080"])
+        let cli = ServeArgsCli::try_parse_from(["test", "-c", "short.toml", "-p", "8080"])
             .expect("short flags should parse");
         assert_eq!(cli.serve.port, 8080);
-        assert_eq!(cli.serve.manifest, Some(PathBuf::from("short.toml")));
+        assert_eq!(cli.serve.config, Some(PathBuf::from("short.toml")));
     }
 
     fn workspace_root() -> PathBuf {
@@ -234,7 +235,8 @@ mod tests {
 
     /// Builds the hello-world crate as a cdylib.
     ///
-    /// Builds in the specified profile and target directory. Panics if the build fails.
+    /// Builds in the specified profile and target directory. Panics if the
+    /// build fails.
     fn build_hello_world_cdylib(target_dir: &Path, profile: &str) {
         let mut cmd = Command::new("cargo");
         cmd.current_dir(workspace_root());
@@ -268,29 +270,30 @@ mod tests {
             .clone()
     }
 
-    /// Generates a unique temp manifest path for each test.
+    /// Generates a unique temp config path for each test.
     ///
-    /// Uses a counter and process ID to ensure uniqueness across concurrent test runs.
-    fn temp_manifest_path() -> PathBuf {
-        let counter = TEMP_MANIFEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    /// Uses a counter and process ID to ensure uniqueness across concurrent
+    /// test runs.
+    fn temp_config_path() -> PathBuf {
+        let counter = TEMP_CONFIG_COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "cargo-operai-serve-manifest-{}-{counter}.toml",
+            "cargo-operai-serve-config-{}-{counter}.toml",
             std::process::id()
         ))
     }
 
-    /// Creates a temp manifest file that loads the given library.
+    /// Creates a temp config file that loads the given library.
     ///
     /// Handles Windows path escaping for TOML strings.
-    fn write_manifest_for_library(path: &Path) -> PathBuf {
-        let manifest_path = temp_manifest_path();
+    fn write_config_for_library(path: &Path) -> PathBuf {
+        let config_path = temp_config_path();
         let mut path_str = path.display().to_string();
         if std::path::MAIN_SEPARATOR == '\\' {
             path_str = path_str.replace('\\', "\\\\");
         }
         let contents = format!("[[tools]]\npath = \"{path_str}\"\n");
-        std::fs::write(&manifest_path, contents).expect("write manifest");
-        manifest_path
+        std::fs::write(&config_path, contents).expect("write config");
+        config_path
     }
 
     /// Attempts to connect to the gRPC server with retry logic.
@@ -320,7 +323,7 @@ mod tests {
     ///
     /// This test:
     /// 1. Builds a sample toolbox library
-    /// 2. Creates a manifest referencing it
+    /// 2. Creates a config referencing it
     /// 3. Starts the server on a random port
     /// 4. Connects and verifies tools are accessible
     /// 5. Shuts down the server cleanly
@@ -329,11 +332,11 @@ mod tests {
         let _lock = crate::testing::test_lock_async().await;
 
         let lib_path = hello_world_cdylib_path();
-        let manifest_path = write_manifest_for_library(&lib_path);
+        let config_path = write_config_for_library(&lib_path);
 
         let port = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
         let args = ServeArgs {
-            manifest: Some(manifest_path),
+            config: Some(config_path),
             port,
         };
 

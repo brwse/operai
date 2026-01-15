@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/operai-embedding",
     "crates/operai-abi",
     "crates/operai-macro",
     "crates/operai",
@@ -49,7 +48,7 @@ operai = { path = "crates/operai", version = "0.1.1" }
 operai-core = { path = "crates/operai-core", version = "0.1.1" }
 operai-runtime = { path = "crates/operai-runtime", version = "0.1.1" }
 operai-build = { path = "crates/operai-build", version = "0.1.1" }
-operai-embedding = { path = "crates/operai-embedding", version = "0.1.0" }
+embed_anything = "0.6.7"
 
 # gRPC / Protobuf
 tonic = "0.14"
@@ -107,10 +106,6 @@ anyhow = "1.0"
 
 # Inventory for compile-time registration
 inventory = "0.3"
-
-# Embeddings (async-openai supports OpenAI embedding API)
-async-openai = { version = "0.32", features = ["embedding"] }
-fastembed = "5"
 
 # HTTP client
 reqwest = { version = "0.13", features = [

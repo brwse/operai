@@ -1,12 +1,15 @@
 //! Builder for constructing Operai runtime instances.
 //!
-//! This module provides [`RuntimeBuilder`], a fluent builder API for configuring and
-//! constructing either local or remote runtime instances. The builder handles:
+//! This module provides [`RuntimeBuilder`], a fluent builder API for
+//! configuring and constructing either local or remote runtime instances. The
+//! builder handles:
 //!
-//! - **Manifest Loading**: Parsing tool configurations from `operai.toml`
-//! - **Tool Registration**: Loading dynamic tool libraries and static tool modules
+//! - **Project Config Loading**: Parsing tool configurations from `operai.toml`
+//! - **Tool Registration**: Loading dynamic tool libraries and static tool
+//!   modules
 //! - **Policy Setup**: Resolving and registering policy enforcement rules
-//! - **Runtime Mode**: Choosing between local execution or remote gRPC connections
+//! - **Runtime Mode**: Choosing between local execution or remote gRPC
+//!   connections
 //!
 //! # Usage
 //!
@@ -14,9 +17,9 @@
 //! use operai_runtime::RuntimeBuilder;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Build a local runtime with custom manifest path
+//! // Build a local runtime with custom project config path
 //! let runtime = RuntimeBuilder::new()
-//!     .with_manifest_path("custom/operai.toml")
+//!     .with_config_path("custom/operai.toml")
 //!     .build_local()
 //!     .await?;
 //!
@@ -39,7 +42,7 @@ use operai_abi::RuntimeContext;
 #[cfg(feature = "static-link")]
 use operai_abi::ToolModuleRef;
 use operai_core::{
-    Manifest, ToolRegistry,
+    Config, ToolRegistry,
     policy::session::{InMemoryPolicySessionStore, PolicyStore},
 };
 use tracing::{error, info, warn};
@@ -49,9 +52,9 @@ use crate::runtime::{LocalRuntime, RemoteRuntime, Runtime};
 /// Errors that can occur during runtime construction.
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeBuildError {
-    /// Failed to load or parse the manifest file.
-    #[error("failed to load manifest: {0}")]
-    Manifest(#[from] operai_core::ManifestError),
+    /// Failed to load or parse the config file.
+    #[error("failed to load config: {0}")]
+    Config(#[from] operai_core::ConfigError),
 
     /// Attempted to build a remote runtime without configuring an endpoint.
     #[error("remote endpoint is required")]
@@ -70,10 +73,10 @@ enum RuntimeMode {
 
 /// Fluent builder for constructing [`Runtime`] instances.
 ///
-/// `RuntimeBuilder` provides a configurable way to set up either local or remote
-/// runtime instances. It supports:
+/// `RuntimeBuilder` provides a configurable way to set up either local or
+/// remote runtime instances. It supports:
 ///
-/// - Custom manifest paths for tool configuration
+/// - Custom config paths for tool configuration
 /// - Runtime context injection for environment-specific settings
 /// - Local tool library loading from dynamic libraries
 /// - Static tool module registration (when `static-link` feature is enabled)
@@ -81,7 +84,7 @@ enum RuntimeMode {
 ///
 /// # Default Configuration
 ///
-/// - Manifest path: `operai.toml` in the current directory
+/// - Config path: `operai.toml` in the current directory
 /// - Runtime mode: Local execution
 /// - Static tools: None (empty list)
 ///
@@ -91,7 +94,7 @@ enum RuntimeMode {
 /// # use operai_runtime::RuntimeBuilder;
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let runtime = RuntimeBuilder::new()
-///     .with_manifest_path("tools/operai.toml")
+///     .with_config_path("tools/operai.toml")
 ///     .local()
 ///     .build()
 ///     .await?;
@@ -100,7 +103,7 @@ enum RuntimeMode {
 /// ```
 #[derive(Clone)]
 pub struct RuntimeBuilder {
-    manifest_path: PathBuf,
+    config_path: PathBuf,
     runtime_ctx: RuntimeContext,
     mode: RuntimeMode,
     #[cfg(feature = "static-link")]
@@ -111,7 +114,7 @@ impl fmt::Debug for RuntimeBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug_struct = f.debug_struct("RuntimeBuilder");
         debug_struct
-            .field("manifest_path", &self.manifest_path)
+            .field("config_path", &self.config_path)
             .field("runtime_ctx", &self.runtime_ctx)
             .field("mode", &self.mode);
         #[cfg(feature = "static-link")]
@@ -127,13 +130,14 @@ impl RuntimeBuilder {
     ///
     /// # Default Values
     ///
-    /// - Manifest path: `operai.toml`
+    /// - Project config path: `operai.toml` (uses unified resolution if not
+    ///   found)
     /// - Runtime context: Empty (newly created)
     /// - Mode: Local execution
     #[must_use]
     pub fn new() -> Self {
         Self {
-            manifest_path: PathBuf::from("operai.toml"),
+            config_path: PathBuf::from("operai.toml"),
             runtime_ctx: RuntimeContext::new(),
             mode: RuntimeMode::Local,
             #[cfg(feature = "static-link")]
@@ -141,18 +145,19 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Sets the path to the manifest file (`operai.toml`).
+    /// Sets the path to the project config file (`operai.toml`).
     ///
-    /// The manifest file defines which tools should be loaded and any policies
-    /// that should be enforced. If not set, defaults to `operai.toml` in the
-    /// current directory.
+    /// The project config file defines which tools should be loaded and any
+    /// policies that should be enforced. If not set, the builder will use
+    /// the unified resolution algorithm to find `operai.toml` in the
+    /// current directory or any parent directories.
     ///
     /// # Parameters
     ///
-    /// - `path`: Path to the manifest file (relative or absolute)
+    /// - `path`: Path to the project config file (relative or absolute)
     #[must_use]
-    pub fn with_manifest_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.manifest_path = path.into();
+    pub fn with_config_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config_path = path.into();
         self
     }
 
@@ -172,14 +177,14 @@ impl RuntimeBuilder {
 
     /// Builds a [`LocalRuntime`] instance.
     ///
-    /// This method loads tools from the configured manifest, initializes
+    /// This method loads tools from the configured config, initializes
     /// the policy store, and constructs a local runtime that executes tools
     /// in-process. Tool loading failures are logged but do not prevent the
     /// runtime from being built.
     ///
     /// # Errors
     ///
-    /// Returns [`RuntimeBuildError::Manifest`] if the manifest file cannot be
+    /// Returns [`RuntimeBuildError::Config`] if the config file cannot be
     /// loaded or parsed.
     pub async fn build_local(self) -> Result<LocalRuntime, RuntimeBuildError> {
         build_local_runtime(self).await
@@ -187,12 +192,14 @@ impl RuntimeBuilder {
 
     /// Builds a [`RemoteRuntime`] connected to a gRPC endpoint.
     ///
-    /// The builder must be configured for remote mode using [`remote`](Self::remote)
-    /// before calling this method. Tool execution is delegated to the remote server.
+    /// The builder must be configured for remote mode using
+    /// [`remote`](Self::remote) before calling this method. Tool execution
+    /// is delegated to the remote server.
     ///
     /// # Errors
     ///
-    /// - [`RuntimeBuildError::MissingRemoteEndpoint`] if the builder is in local mode
+    /// - [`RuntimeBuildError::MissingRemoteEndpoint`] if the builder is in
+    ///   local mode
     /// - [`RuntimeBuildError::Transport`] if the connection fails
     pub async fn build_remote(self) -> Result<RemoteRuntime, RuntimeBuildError> {
         let endpoint = match self.mode {
@@ -206,13 +213,14 @@ impl RuntimeBuilder {
 
     /// Builds a [`Runtime`] enum based on the configured mode.
     ///
-    /// This is a convenience method that returns either a local or remote runtime
-    /// based on the builder's current mode configuration.
+    /// This is a convenience method that returns either a local or remote
+    /// runtime based on the builder's current mode configuration.
     ///
     /// # Errors
     ///
-    /// - [`RuntimeBuildError::Manifest`] if loading the manifest fails (local mode)
-    /// - [`RuntimeBuildError::MissingRemoteEndpoint`] if remote mode is not configured
+    /// - [`RuntimeBuildError::Config`] if loading the config fails (local mode)
+    /// - [`RuntimeBuildError::MissingRemoteEndpoint`] if remote mode is not
+    ///   configured
     /// - [`RuntimeBuildError::Transport`] if the remote connection fails
     pub async fn build(self) -> Result<Runtime, RuntimeBuildError> {
         match self.mode.clone() {
@@ -276,26 +284,29 @@ impl Default for RuntimeBuilder {
 
 /// Builds a local runtime from the builder configuration.
 ///
-/// This internal function handles the core logic of constructing a local runtime:
+/// This internal function handles the core logic of constructing a local
+/// runtime:
 ///
-/// 1. Loads the manifest from the configured path (or returns empty if missing)
+/// 1. Loads the project config from the configured path (or uses unified
+///    resolution if not set)
 /// 2. Creates a tool registry and loads all enabled tool libraries
 /// 3. Registers any static tool modules
-/// 4. Initializes the policy store and registers policies from the manifest
+/// 4. Initializes the policy store and registers policies from the project
+///    config
 ///
 /// Tool loading failures are logged but do not prevent runtime construction.
 /// Policy registration failures are similarly logged and skipped.
 async fn build_local_runtime(builder: RuntimeBuilder) -> Result<LocalRuntime, RuntimeBuildError> {
-    let manifest_path = builder.manifest_path;
+    let config_path = builder.config_path;
     let runtime_ctx = builder.runtime_ctx;
 
-    let manifest = load_manifest_or_empty(&manifest_path)?;
-    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let config = load_config_or_empty(&config_path)?;
+    let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
 
     let mut registry = ToolRegistry::new();
 
-    for tool_config in manifest.enabled_tools() {
-        let Some(path) = resolve_tool_path(tool_config, manifest_dir) else {
+    for tool_config in config.enabled_tools() {
+        let Some(path) = resolve_tool_path(tool_config, config_dir) else {
             warn!("Tool config missing path and package, skipping.");
             continue;
         };
@@ -331,7 +342,7 @@ async fn build_local_runtime(builder: RuntimeBuilder) -> Result<LocalRuntime, Ru
     let session_store = Arc::new(InMemoryPolicySessionStore::new());
     let policy_store = Arc::new(PolicyStore::new(session_store));
 
-    match manifest.resolve_policies(&manifest_path) {
+    match config.resolve_policies(&config_path) {
         Ok(policies) => {
             for policy in policies {
                 let name = policy.name.clone();
@@ -347,7 +358,7 @@ async fn build_local_runtime(builder: RuntimeBuilder) -> Result<LocalRuntime, Ru
             }
         }
         Err(e) => {
-            warn!(error = %e, "Failed to resolve policies from manifest");
+            warn!(error = %e, "Failed to resolve policies from config");
         }
     }
 
@@ -358,27 +369,28 @@ async fn build_local_runtime(builder: RuntimeBuilder) -> Result<LocalRuntime, Ru
     ))
 }
 
-/// Loads a manifest from the given path, returning an empty manifest if not found.
+/// Loads a config from the given path, returning an empty config if not found.
 ///
-/// This graceful degradation allows the runtime to start even without a manifest
+/// This graceful degradation allows the runtime to start even without a config
 /// file, useful for testing or purely static tool configurations.
 ///
 /// # Parameters
 ///
-/// - `manifest_path`: Path to the manifest file
+/// - `config_path`: Path to the config file
 ///
 /// # Returns
 ///
-/// - `Ok(Manifest)` - The loaded manifest, or an empty one if the file doesn't exist
-fn load_manifest_or_empty(manifest_path: &Path) -> Result<Manifest, RuntimeBuildError> {
-    if manifest_path.exists() {
-        Ok(Manifest::load(manifest_path)?)
+/// - `Ok(Config)` - The loaded config, or an empty one if the file doesn't
+///   exist
+fn load_config_or_empty(config_path: &Path) -> Result<Config, RuntimeBuildError> {
+    if config_path.exists() {
+        Ok(Config::load(config_path)?)
     } else {
         warn!(
-            path = %manifest_path.display(),
-            "Manifest file not found, starting with empty registry"
+            path = %config_path.display(),
+            "Config file not found, starting with empty registry"
         );
-        Ok(Manifest::empty())
+        Ok(Config::empty())
     }
 }
 
@@ -387,9 +399,11 @@ fn load_manifest_or_empty(manifest_path: &Path) -> Result<Manifest, RuntimeBuild
 /// This function implements the tool resolution strategy, which tries multiple
 /// approaches in order:
 ///
-/// 1. **Explicit path**: If `tool.path` is set, use it (absolute or relative to manifest dir)
-/// 2. **Name-based search**: If `tool.name` is set, search in standard locations:
-///    - `<manifest_dir>/target/release/`
+/// 1. **Explicit path**: If `tool.path` is set, use it (absolute or relative to
+///    config dir)
+/// 2. **Name-based search**: If `tool.name` is set, search in standard
+///    locations:
+///    - `<config_dir>/target/release/`
 ///    - `/usr/local/lib/operai/`
 ///    - `<workspace_root>/target/release/` (if in a workspace)
 ///    - `~/.operai/tools/` (home directory)
@@ -397,20 +411,21 @@ fn load_manifest_or_empty(manifest_path: &Path) -> Result<Manifest, RuntimeBuild
 /// # Parameters
 ///
 /// - `tool`: Tool configuration containing either a path or name
-/// - `manifest_dir`: Directory containing the manifest file (for resolving relative paths)
+/// - `config_dir`: Directory containing the config file (for resolving relative
+///   paths)
 ///
 /// # Returns
 ///
 /// - `Some(PathBuf)` - Resolved path to the tool library
 /// - `None` - No path or name specified in the tool config
-fn resolve_tool_path(tool: &operai_core::ToolConfig, manifest_dir: &Path) -> Option<PathBuf> {
+fn resolve_tool_path(tool: &operai_core::ToolConfig, config_dir: &Path) -> Option<PathBuf> {
     // 1. Explicit path takes precedence
     if let Some(path) = &tool.path {
         let path = PathBuf::from(path);
         if path.is_absolute() {
             return Some(path);
         } else {
-            return Some(manifest_dir.join(path));
+            return Some(config_dir.join(path));
         }
     }
 
@@ -426,13 +441,13 @@ fn resolve_tool_path(tool: &operai_core::ToolConfig, manifest_dir: &Path) -> Opt
         // Collect all search paths as Option<PathBuf>, then filter and flatten
         let mut search_paths: Vec<Option<PathBuf>> = vec![
             // Standard target/release directory
-            Some(manifest_dir.join("target/release")),
+            Some(config_dir.join("target/release")),
             // System-wide tools directory
             Some(PathBuf::from("/usr/local/lib/operai")),
         ];
 
         // Workspace target directory (if in workspace)
-        let workspace_target = manifest_dir.join("..").join("..").join("target/release");
+        let workspace_target = config_dir.join("..").join("..").join("target/release");
         if workspace_target.exists() {
             search_paths.push(Some(workspace_target));
         }
@@ -455,7 +470,7 @@ fn resolve_tool_path(tool: &operai_core::ToolConfig, manifest_dir: &Path) -> Opt
         }
 
         // If not found, return the default path for better error messages
-        let default_path = manifest_dir.join("target/release").join(&lib_name);
+        let default_path = config_dir.join("target/release").join(&lib_name);
         warn!(
             name = %name,
             attempted_path = %default_path.display(),
@@ -509,7 +524,7 @@ mod tests {
     };
 
     static HELLO_WORLD_CDYLIB_PATH: OnceLock<PathBuf> = OnceLock::new();
-    static TEMP_MANIFEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+    static TEMP_CONFIG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn workspace_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -596,23 +611,23 @@ mod tests {
             .clone()
     }
 
-    fn temp_manifest_path() -> PathBuf {
-        let counter = TEMP_MANIFEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    fn temp_config_path() -> PathBuf {
+        let counter = TEMP_CONFIG_COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "operai-runtime-manifest-{}-{counter}.toml",
+            "operai-runtime-config-{}-{counter}.toml",
             std::process::id()
         ))
     }
 
-    fn write_manifest_for_library(path: &Path) -> PathBuf {
-        let manifest_path = temp_manifest_path();
+    fn write_config_for_library(path: &Path) -> PathBuf {
+        let config_path = temp_config_path();
         let mut path_str = path.display().to_string();
         if std::path::MAIN_SEPARATOR == '\\' {
             path_str = path_str.replace('\\', "\\\\");
         }
         let contents = format!("[[tools]]\npath = \"{path_str}\"\n");
-        std::fs::write(&manifest_path, contents).expect("write manifest");
-        manifest_path
+        std::fs::write(&config_path, contents).expect("write config");
+        config_path
     }
 
     fn make_string_value(s: &str) -> prost_types::Value {
@@ -633,12 +648,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_runtime_builder_loads_manifest_and_calls_tool() {
+    async fn test_runtime_builder_loads_config_and_calls_tool() {
         let lib_path = hello_world_cdylib_path();
-        let manifest_path = write_manifest_for_library(&lib_path);
+        let config_path = write_config_for_library(&lib_path);
 
         let runtime = RuntimeBuilder::new()
-            .with_manifest_path(&manifest_path)
+            .with_config_path(&config_path)
             .build_local()
             .await
             .expect("runtime should build");
@@ -684,14 +699,14 @@ mod tests {
     async fn test_runtime_builder_name_based_resolution() {
         let lib_path = hello_world_cdylib_path();
 
-        // Create a manifest in temp directory that uses name-based resolution
-        let manifest_path = temp_manifest_path();
-        let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+        // Create a config in temp directory that uses name-based resolution
+        let config_path = temp_config_path();
+        let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
         let contents = format!("[[tools]]\nname = \"hello_world\"\nenabled = true\n");
-        std::fs::write(&manifest_path, contents).expect("write manifest");
+        std::fs::write(&config_path, contents).expect("write config");
 
-        // Create target/release structure in manifest dir for testing
-        let target_dir = manifest_dir.join("target/release");
+        // Create target/release structure in config dir for testing
+        let target_dir = config_dir.join("target/release");
         std::fs::create_dir_all(&target_dir).expect("create target dir");
 
         // Copy library to test location
@@ -703,7 +718,7 @@ mod tests {
         std::fs::copy(&lib_path, &test_lib_dest).expect("copy library");
 
         let runtime = RuntimeBuilder::new()
-            .with_manifest_path(&manifest_path)
+            .with_config_path(&config_path)
             .build_local()
             .await
             .expect("runtime should build with name-based resolution");

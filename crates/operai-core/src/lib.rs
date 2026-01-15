@@ -2,14 +2,14 @@
 //!
 //! This crate provides the foundational infrastructure for dynamically loading,
 //! managing, and executing tools through a plugin-based architecture. It handles
-//! tool lifecycles, policy enforcement, and manifest-based configuration.
+//! tool lifecycles, policy enforcement, and config-based configuration.
 //!
 //! # Key Components
 //!
 //! - **Tool Loading**: Dynamic library loading via [`ToolLibrary`] with ABI version checking
 //! - **Tool Registry**: Centralized tool management through [`ToolRegistry`]
 //! - **Policy System**: CEL-based policy evaluation for controlling tool execution
-//! - **Manifests**: TOML-based configuration for tools and policies
+//! - **Config**: TOML-based configuration for tools and policies
 //!
 //! # Example
 //!
@@ -47,8 +47,8 @@
 //! concurrent queries ([`get`], [`list`], [`search`]). Tool handles use interior
 //! `Arc` wrapping for safe concurrent invocation.
 
+mod config;
 mod loader;
-mod manifest;
 mod tool;
 
 /// Tool loading and lifecycle management.
@@ -57,11 +57,16 @@ mod tool;
 /// ABI validation and optional checksum verification.
 pub use loader::{LoadError, ToolLibrary};
 
-/// Manifest parsing and configuration.
+/// Unified configuration system.
 ///
-/// Types for loading and validating TOML manifests that define tools,
-/// policies, and configuration data.
-pub use manifest::{Manifest, ManifestError, ToolConfig};
+/// Provides configuration types with a unified resolution algorithm for finding
+/// and loading config files.
+///
+/// Most users will work with [`Config`] directly for project configuration.
+/// Use [`ConfigFile`] when you need the unified resolution algorithm.
+pub use config::{
+    Config, ConfigError, ConfigFile, ConfigKind, CredentialsConfig, PolicyConfig, ToolConfig,
+};
 
 /// Tool registry and invocation.
 ///
@@ -83,8 +88,8 @@ pub use policy::{Effect, Policy, PolicyError, session};
 
 // All tests are in their respective submodules:
 // - loader::tests
-// - manifest::tests
-// - registry::tests
+// - config::tests
+// - tool::tests
 //
 // This lib.rs only re-exports public types, so no additional tests needed here.
 // See TESTING.md: "Don't test framework/library code" and avoid redundant

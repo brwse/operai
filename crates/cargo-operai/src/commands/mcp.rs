@@ -18,7 +18,6 @@ use std::{future::Future, net::SocketAddr, path::PathBuf};
 use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
-use operai_embedding::EmbeddingGenerator;
 use operai_runtime::{McpService, RuntimeBuilder, SearchEmbedFuture, SearchEmbedder};
 use rmcp::{
     service::ServiceExt,
@@ -27,12 +26,14 @@ use rmcp::{
 use tokio::signal;
 use tracing::info;
 
+use crate::embedding::EmbeddingGenerator;
+
 /// Command-line arguments for the MCP server subcommand.
 #[derive(Args)]
 pub struct McpArgs {
-    /// Path to the operai manifest file (defaults to `operai.toml`).
+    /// Path to the operai project config file (defaults to `operai.toml`).
     #[arg(short, long)]
-    pub manifest: Option<PathBuf>,
+    pub config: Option<PathBuf>,
 
     /// Address to bind the HTTP server to (defaults to `127.0.0.1:3333`).
     #[arg(short = 'a', long, default_value = "127.0.0.1:3333")]
@@ -62,12 +63,17 @@ pub struct McpArgs {
 ///
 /// This function sets up a Ctrl+C signal handler and starts the server.
 /// The server mode (HTTP or stdio) is determined by the `stdio` flag in `args`.
-pub async fn run(args: &McpArgs) -> Result<()> {
+///
+/// # Arguments
+///
+/// * `args` - Configuration for the MCP server
+/// * `config` - Operai project config
+pub async fn run(args: &McpArgs, config: &operai_core::Config) -> Result<()> {
     let shutdown = async {
         let _ = signal::ctrl_c().await;
         info!("Received shutdown signal");
     };
-    run_with_shutdown(args, shutdown).await
+    run_with_shutdown(args, shutdown, config).await
 }
 
 /// Runs the MCP server with a custom shutdown future.
@@ -76,11 +82,12 @@ pub async fn run(args: &McpArgs) -> Result<()> {
 ///
 /// * `args` - Configuration for the MCP server
 /// * `shutdown` - A future that completes when the server should shut down
+/// * `config` - Operai project config
 ///
 /// # Behavior
 ///
 /// This function:
-/// 1. Loads the operai runtime from the manifest
+/// 1. Uses the provided config to initialize the runtime
 /// 2. Optionally initializes a search embedder if `--searchable` is enabled
 /// 3. Either starts an HTTP server or stdio server based on the `stdio` flag
 /// 4. Waits for the shutdown signal
@@ -89,28 +96,33 @@ pub async fn run(args: &McpArgs) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error if:
-/// - The manifest file cannot be loaded
+/// - The config file cannot be loaded
 /// - The runtime fails to initialize
 /// - The search embedder fails to initialize (when `--searchable` is enabled)
 /// - The server fails to bind to the specified address
 /// - The server encounters an error during operation
-async fn run_with_shutdown<F>(args: &McpArgs, shutdown: F) -> Result<()>
+async fn run_with_shutdown<F>(args: &McpArgs, shutdown: F, config: &operai_core::Config) -> Result<()>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let manifest_path = args
-        .manifest
+    let config_path = args
+        .config
         .clone()
         .unwrap_or_else(|| PathBuf::from("operai.toml"));
 
     let local_runtime = RuntimeBuilder::new()
-        .with_manifest_path(manifest_path)
+        .with_config_path(config_path)
         .build_local()
         .await
         .context("failed to initialize runtime")?;
 
     let search_embedder = if args.searchable {
-        Some(build_search_embedder().context("failed to initialize search embedder")?)
+        Some(
+            std::sync::Arc::new(CliSearchEmbedder::new(
+                EmbeddingGenerator::from_config(config)
+                    .context("failed to initialize search embedder")?,
+            )) as std::sync::Arc<dyn SearchEmbedder>
+        )
     } else {
         None
     };
@@ -193,20 +205,6 @@ impl SearchEmbedder for CliSearchEmbedder {
         let generator = &self.generator;
         Box::pin(async move { generator.embed(&query).await.map_err(|err| err.to_string()) })
     }
-}
-
-/// Builds a search embedder using default configuration.
-///
-/// This function creates an [`EmbeddingGenerator`] from the default config
-/// (which reads from environment variables or config files) and wraps it
-/// in a [`CliSearchEmbedder`] for use with the MCP service.
-///
-/// # Errors
-///
-/// Returns an error if the embedding generator fails to initialize from config.
-fn build_search_embedder() -> Result<std::sync::Arc<dyn SearchEmbedder>> {
-    let generator = EmbeddingGenerator::from_config(None, None)?;
-    Ok(std::sync::Arc::new(CliSearchEmbedder::new(generator)))
 }
 
 /// Runs the MCP server in stdio mode.
@@ -331,7 +329,7 @@ mod tests {
         assert_eq!(cli.mcp.path, "/mcp");
         assert!(!cli.mcp.searchable);
         assert!(!cli.mcp.stdio);
-        assert_eq!(cli.mcp.manifest, None);
+        assert_eq!(cli.mcp.config, None);
     }
 
     /// Verifies that [`McpArgs`] correctly parses all supported flags.
@@ -339,7 +337,7 @@ mod tests {
     fn test_mcp_args_parse_flags() {
         let cli = McpArgsCli::try_parse_from([
             "test",
-            "--manifest",
+            "--config",
             "custom.toml",
             "--addr",
             "0.0.0.0:9000",
@@ -349,7 +347,7 @@ mod tests {
             "--stdio",
         ])
         .expect("args should parse");
-        assert_eq!(cli.mcp.manifest, Some(PathBuf::from("custom.toml")));
+        assert_eq!(cli.mcp.config, Some(PathBuf::from("custom.toml")));
         assert_eq!(cli.mcp.addr, "0.0.0.0:9000");
         assert_eq!(cli.mcp.path, "/custom");
         assert!(cli.mcp.searchable);

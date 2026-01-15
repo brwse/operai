@@ -11,6 +11,8 @@ license-file.workspace = true
 workspace = true
 
 [dependencies]
+dirs = "5.0"
+tempfile = "3"
 operai-abi = { workspace = true }
 
 abi_stable = { workspace = true }

@@ -30,12 +30,13 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 
 # Embeddings
-operai-embedding = { workspace = true }
+embed_anything = { workspace = true }
 
 # Utilities
 indicatif = { workspace = true }
 console = { workspace = true }
 axum = { workspace = true }
+walkdir = { workspace = true }
 
 # Server
 operai-runtime = { workspace = true, features = ["mcp"] }
