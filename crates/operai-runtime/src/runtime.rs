@@ -28,7 +28,8 @@
 //!
 //! # Policy Enforcement
 //!
-//! Local runtimes enforce policies through a [`PolicyStore`]:
+//! Local runtimes enforce policies through a
+//! [`PolicyStore`](operai_core::policy::session::PolicyStore):
 //! - Pre-call policies evaluate before tool execution and can deny requests
 //! - Post-call policies evaluate after tool execution and can observe results
 //! - Policies are evaluated per-session, enabling fine-grained access control
@@ -139,7 +140,7 @@ impl Runtime {
 /// Local runtime that executes tools in-process.
 ///
 /// This runtime manages a registry of dynamically-loaded tool libraries and
-/// executes tool calls locally. It enforces policies through a [`PolicyStore`]
+/// executes tool calls locally. It enforces policies through a `PolicyStore`
 /// before and after tool execution, and handles serialization/deserialization
 /// of inputs and outputs.
 ///

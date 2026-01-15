@@ -16,7 +16,7 @@
 //!
 //! # Architecture
 //!
-//! The [`McpService`] implements the [`rmcp::ServerHandler`] trait, bridging
+//! `McpService` implements the `rmcp::ServerHandler` trait, bridging
 //! the MCP protocol with the local tool runtime. It handles:
 //!
 //! - Tool discovery and metadata conversion
@@ -64,9 +64,9 @@ const SEARCH_TOOL_CALL: &str = "call_tool";
 /// # Configuration
 ///
 /// Use the builder-style methods to configure the service:
-/// - [`searchable`]: Enable search mode with meta-tools
-/// - [`with_search_embedder`]: Set the embedder for semantic search
-/// - [`with_info`]: Set custom server info (name, version, capabilities)
+/// - [`Self::searchable`]: Enable search mode with meta-tools
+/// - [`Self::with_search_embedder`]: Set the embedder for semantic search
+/// - [`Self::with_info`]: Set custom server info (name, version, capabilities)
 ///
 /// # Example
 ///

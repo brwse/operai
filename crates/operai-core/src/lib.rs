@@ -46,7 +46,8 @@
 //! is not thread-safe. Load all tools before wrapping the registry in `Arc`.
 //!
 //! **Execution phase**: Once wrapped in `std::sync::Arc`, the registry supports
-//! concurrent queries ([`get`], [`list`], [`search`]). Tool handles use
+//! concurrent queries ([`ToolRegistry::get`], [`ToolRegistry::list`],
+//! [`ToolRegistry::search`]). Tool handles use
 //! interior `Arc` wrapping for safe concurrent invocation.
 
 mod config;

@@ -4,17 +4,21 @@ Each line is `Integration — suggested tiny tools (verbs)`.
 This is a brainstorming list, not an implemented feature set.
 
 Principles:
+
 - Tools stay narrow (small + many) and split per product (e.g., Gmail ≠ “Google”).
 - Prefer a handful of high-value verbs per integration (often 3–8).
 
 ## Email & Inbox
+
 - Outlook Mail (Microsoft 365) — search mail; get message; send/reply; move folder; flag
 
 ## CI/CD & Build
+
 - Azure Pipelines — run pipeline; get status; fetch logs; approve stage
 - TeamCity — trigger build; status; fetch logs; download artifacts
 
 ## Deploy & Release
+
 - Argo CD — sync app; get health/status; view diff; rollback
 - Spinnaker — trigger deployment; pipeline status; rollback; view logs
 - Harness — trigger pipeline; approve step; get status; fetch logs
@@ -26,6 +30,7 @@ Principles:
 - Heroku — create release; rollback; config vars; dyno restart
 
 ## Infrastructure as Code & Ops Automation
+
 - Terraform Cloud — start plan; apply run; get output; lock/unlock workspace
 - Pulumi Cloud — preview; apply; fetch stack outputs; list deployments
 - CloudFormation — create/update stack; get events; rollback; delete stack
@@ -33,6 +38,7 @@ Principles:
 - Rundeck — run job; execution status; fetch logs; approve step
 
 ## Kubernetes & Containers
+
 - Kubernetes (generic) — list workloads; get pod logs; rollout restart; scale; describe resource
 - Docker Hub — list repos/tags; get tag metadata; delete tag; webhooks
 - AWS ECR — list repos/images; scan findings; delete image; lifecycle policy
@@ -41,6 +47,7 @@ Principles:
 - Harbor — list projects/repos; scan results; promote image; delete artifact
 
 ## Artifacts & Registries
+
 - JFrog Artifactory — search artifacts; download; publish; manage repo permissions
 - Sonatype Nexus — search artifacts; download; publish; manage repo
 - npm registry — publish; deprecate version; manage dist-tags
@@ -48,6 +55,7 @@ Principles:
 - GitHub Packages — publish; list versions; delete version
 
 ## Cloud Providers (Service-Level)
+
 - AWS S3 — list buckets; list objects; get object; put object; generate presigned URL
 - AWS EC2 — list instances; start/stop; get console output; tag resource
 - AWS Lambda — invoke function; list functions; get configuration; update env vars
@@ -94,6 +102,7 @@ Principles:
 - Azure AKS — list clusters; describe; node pool ops; credentials helper
 
 ## Edge, DNS & CDN
+
 - Cloudflare DNS — list zones; upsert records; purge cache; analytics summary
 - Cloudflare Workers — deploy worker; list routes; tail logs; KV ops
 - Cloudflare R2 — list buckets; get/put object; presigned URL
@@ -102,6 +111,7 @@ Principles:
 - Route 53 (AWS) — list zones; upsert record; health check status
 
 ## Observability (Logs/Metrics/Tracing)
+
 - Datadog — query metrics; search monitors; mute/unmute; query logs; create annotation
 - New Relic — run NRQL; list alerts; acknowledge; create annotation
 - Grafana — query dashboards; create annotation; manage alert rules
@@ -113,6 +123,7 @@ Principles:
 - Honeycomb — query; dataset list; create marker; fetch trace link
 
 ## Incident Response & On-call
+
 - PagerDuty — trigger; acknowledge; resolve; add note; page on-call
 - Opsgenie — create alert; acknowledge; close; add note; schedule override
 - FireHydrant — create incident; update status; add timeline event; postmortem tasks
@@ -121,11 +132,13 @@ Principles:
 - Incident.io — create incident; update timeline; assign roles; status update
 
 ## ITSM & Internal Support
+
 - ServiceNow — search incidents/requests; get record; comment; update state; assign
 - Freshservice — search tickets; reply/note; assign; change status; create problem
 - ManageEngine ServiceDesk — search requests; update; comment; assign
 
 ## SecOps (SIEM/SOAR/EDR)
+
 - Microsoft Sentinel — run KQL; list incidents; update status; assign owner; comment
 - Splunk ES — run SPL; list notable events; assign/close; comment
 - IBM QRadar — search offenses; get offense; assign; close; add note
@@ -138,6 +151,7 @@ Principles:
 - Lacework — list alerts; acknowledge; suppress; export
 
 ## Vulnerability & AppSec
+
 - Snyk — list projects; get issues; ignore issue; create ticket; summary report
 - SonarQube — project status; list issues; assign; mark resolved; export report
 - Veracode — list scans; get findings; mitigation; export report
@@ -146,11 +160,13 @@ Principles:
 - Qualys — list vulnerabilities; export report; exception workflow; tag assets
 
 ## Cloud Security Posture
+
 - AWS Security Hub — list findings; update workflow status; create insight; link ticket
 - AWS GuardDuty — list findings; get finding; archive/unarchive
 - Defender for Cloud — list recommendations; set status; export; create ticket
 
 ## Identity & Access (IAM)
+
 - Okta — search users; deactivate/reactivate; reset MFA; group membership; audit events
 - Entra ID (Azure AD) — search users/groups; add/remove member; reset password; sign-in logs
 - Google Workspace Admin — search users; suspend/restore; reset password; manage groups
@@ -158,11 +174,13 @@ Principles:
 - Duo — list devices; reset auth; bypass; policy status
 
 ## Secrets & Password Managers
+
 - HashiCorp Vault — read secret; write secret (guarded); list paths; token lookup
 - 1Password — get item; search items; create item (guarded); share link
 - Bitwarden — get item; search vault; create item (guarded); collections
 
 ## Data Warehouses & Queries
+
 - Snowflake — run query; query history; resume/suspend warehouse; export results
 - BigQuery — run query; list datasets; export table; job status
 - Redshift — run query; query stats; pause/resume cluster; export
@@ -170,6 +188,7 @@ Principles:
 - PostgreSQL (read-only) — run query; explain; list tables; export CSV
 
 ## ETL / Reverse ETL
+
 - Fivetran — list connectors; trigger sync; status; pause/resume
 - Airbyte — list connections; trigger sync; logs; pause/resume
 - dbt Cloud — trigger job; run status; fetch artifacts; failures
@@ -177,12 +196,14 @@ Principles:
 - Census — trigger sync; status; pause; error report
 
 ## BI & Reporting
+
 - Looker — run query; export dashboard; schedule delivery; share link
 - Tableau — refresh extract; export view; schedule; workbook metadata
 - Power BI — refresh dataset; export report; list dashboards; usage metrics
 - Metabase — run query; export results; schedule pulse; list questions
 
 ## CRM & Sales
+
 - Salesforce — search leads/contacts/accounts; create/update; log activity; update opportunity stage
 - HubSpot CRM — search contacts/companies/deals; create/update; log note; enroll in sequence
 - Pipedrive — search deals; create/update; move stage; add note/activity
@@ -191,6 +212,7 @@ Principles:
 - Salesloft — add person; start cadence; log call/email; update stage
 
 ## Customer Support
+
 - Zendesk Support — search tickets; get ticket; reply; internal note; change status/assignee
 - Intercom — search conversations; reply; assign; tag; create ticket
 - Freshdesk — search tickets; reply/note; assign; change status; merge
@@ -199,6 +221,7 @@ Principles:
 - Gorgias — search tickets; reply; assign; tag; change status
 
 ## Customer Messaging & Notifications
+
 - Twilio — send SMS/WhatsApp; fetch delivery status; inbound handling; number lookup
 - SendGrid — send email; manage templates; suppressions; delivery stats
 - Postmark — send email; templates; bounce status; delivery stats
@@ -206,6 +229,7 @@ Principles:
 - Firebase Cloud Messaging — send push; send to topic; basic delivery status
 
 ## Marketing Automation
+
 - Mailchimp — create campaign draft; add member; schedule send; campaign report
 - Klaviyo — update profile; trigger flow; campaign draft; metrics
 - Braze — trigger campaign/canvas; update user attributes; segment; metrics
@@ -213,6 +237,7 @@ Principles:
 - Marketo — sync lead; trigger campaign; activity log; program status
 
 ## Product Analytics & Feature Flags
+
 - Amplitude — run chart; fetch cohorts; annotation; export
 - Mixpanel — run report; funnels; cohort; export
 - PostHog — insights query; manage feature flags; annotate
@@ -220,6 +245,7 @@ Principles:
 - Statsig — list experiments; update rollout; fetch results; audit
 
 ## Feedback & Surveys
+
 - Canny — create request; vote; comment; change status; merge duplicates
 - Productboard — create insight; link to feature; update status; notes
 - Typeform — list forms; fetch responses; export CSV; webhooks
@@ -227,6 +253,7 @@ Principles:
 - Delighted — fetch NPS responses; send survey; export; tag feedback
 
 ## Finance & Accounting
+
 - QuickBooks Online — create invoice; record payment; list customers; export reports
 - Xero — create invoice; approve; record payment; list contacts; reports
 - NetSuite — search transactions; create/update record; approve PO; export report
@@ -236,24 +263,28 @@ Principles:
 - Brex — list transactions; create expense; manage cards; export
 
 ## Payments
+
 - Stripe — search customer; create checkout/payment link; refund; dispute status; invoices
 - PayPal — invoice; capture; refund; dispute status
 - Square — invoice; take payment; refund; catalog lookup
 - Adyen — payment status; refund; disputes; payout reports
 
 ## E-commerce
+
 - Shopify — list orders; fulfill/cancel; update tracking; manage customers; discounts
 - WooCommerce — list orders; update status; refund; manage products
 - BigCommerce — list orders; update fulfillment; manage products; refunds
 - Magento/Adobe Commerce — list orders; update status; manage products; refunds
 
 ## Shipping & Logistics
+
 - Shippo — create label; track shipment; void label; rate quote
 - ShipStation — list orders; create label; update shipment; tracking
 - EasyPost — create shipment; buy label; track; void/refund
 - AfterShip — track; webhook events; customer notifications; analytics
 
 ## Legal & Signatures
+
 - DocuSign — create envelope; send; status; download signed PDF
 - Adobe Sign — create agreement; send; status; download
 - Dropbox Sign — create request; send; status; download
@@ -261,6 +292,7 @@ Principles:
 - PandaDoc — create doc; send; status; download
 
 ## HR & Recruiting
+
 - Greenhouse — list jobs; search candidates; add note; move stage; schedule interview
 - Lever — search candidates; add note; move stage; schedule; offer status
 - Ashby — search candidates; update stage; add note; schedule
@@ -268,6 +300,7 @@ Principles:
 - Rippling — onboard/offboard checklist; app access requests; device status
 
 ## Publishing & CMS
+
 - WordPress — create draft; update/publish; upload media; moderate comments
 - Ghost — create draft; publish; tags; newsletter send
 - Webflow — publish site; update CMS item; upload asset; form submissions
@@ -275,6 +308,7 @@ Principles:
 - Sanity — create/update document; publish; query; upload asset
 
 ## Social & Community
+
 - X (Twitter) — post; schedule; fetch mentions; reply; delete
 - LinkedIn — create post; fetch comments; reply; company page posting
 - YouTube — upload; fetch comments; reply; basic analytics
@@ -282,11 +316,13 @@ Principles:
 - Discourse — create topic; reply; moderate; tags/categories
 
 ## Design & Whiteboards
+
 - Figma — get file metadata; export frames; list components/styles; comment
 - Miro — list boards; create sticky; update sticky; export board
 - Mural — list murals; create item; comment; export
 
 ## Automation Platforms & Webhooks
+
 - Zapier — trigger zap; task history; list zaps; connection status
 - Make (Integromat) — run scenario; list scenarios; execution logs; schedule toggle
 - n8n — trigger workflow; list workflows; execution status; logs

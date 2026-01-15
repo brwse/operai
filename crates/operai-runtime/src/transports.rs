@@ -7,10 +7,10 @@
 //!
 //! # Available Transports
 //!
-//! - [`grpc`] - gRPC/HTTP2 transport using Tonic, providing high-performance
-//!   RPC access
-//! - [`mcp`] - Model Context Protocol (MCP) transport for HTTP-based tool
-//!   serving (feature-gated)
+//! - `grpc` - gRPC/HTTP2 transport using Tonic, providing high-performance RPC
+//!   access
+//! - `mcp` - Model Context Protocol (MCP) transport for HTTP-based tool serving
+//!   (feature-gated, requires `mcp` feature)
 //!
 //! # Architecture
 //!
@@ -44,7 +44,7 @@ pub mod grpc;
 
 /// Model Context Protocol (MCP) transport implementation.
 ///
-/// Provides an [`McpService`](mcp::McpService) that implements the MCP protocol
+/// Provides `McpService` that implements the MCP protocol
 /// for HTTP-based tool serving with streaming support. Requires the `mcp`
 /// feature.
 #[cfg(feature = "mcp")]

@@ -145,8 +145,8 @@ use crate::PolicyError;
 ///
 /// # Required Methods
 ///
-/// - [`load`]: Retrieve a session by ID
-/// - [`save`]: Persist a session with version checking
+/// - [`Self::load`]: Retrieve a session by ID
+/// - [`Self::save`]: Persist a session with version checking
 #[async_trait]
 pub trait PolicySessionStore: std::fmt::Debug + Send + Sync {
     /// Load a session from storage.
