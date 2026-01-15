@@ -256,7 +256,7 @@ mod tests {
         let tool_entry = inventory::iter::<ToolEntry>()
             .find(|entry| entry.id == TEST_TOOL_ID)
             .expect("test tool entry must be registered via inventory");
-        let ctx = Context::with_metadata("req-123", "sess-456", "user-789");
+        let ctx = Context::with_metadata("req-123", "sess-456");
         let input = b"hello".to_vec();
 
         // Act
@@ -283,7 +283,7 @@ mod tests {
         let tool_entry = inventory::iter::<ToolEntry>()
             .find(|entry| entry.id == TEST_TOOL_ID)
             .expect("test tool entry must be registered via inventory");
-        let ctx = Context::with_metadata("empty-test", "sess", "user");
+        let ctx = Context::with_metadata("empty-test", "sess");
         let input = Vec::new();
 
         // Act
@@ -342,7 +342,7 @@ mod tests {
         let tool_entry = inventory::iter::<ToolEntry>()
             .find(|entry| entry.id == TEST_TOOL_ID)
             .expect("test tool entry must be registered");
-        let ctx = Context::with_metadata("spawn-test", "sess", "user");
+        let ctx = Context::with_metadata("spawn-test", "sess");
         let input = b"test".to_vec();
 
         // Act - verify the future is Send by spawning it

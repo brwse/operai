@@ -35,7 +35,7 @@ use std::{
 
 use abi_stable::library::RootModule;
 use operai_abi::{InitArgs, RuntimeContext, TOOL_ABI_VERSION, ToolModuleRef, ToolResult};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, instrument};
 
 /// Errors that can occur during tool library loading.
 ///
@@ -158,6 +158,7 @@ impl ToolLibrary {
     /// let library =
     ///     ToolLibrary::load("./tools/tool.so", Some("abc123...")).expect("Failed to load library");
     /// ```
+    #[instrument(skip(checksum), fields(path = %path.as_ref().display()))]
     pub fn load(path: impl AsRef<Path>, checksum: Option<&str>) -> Result<Self, LoadError> {
         let path = path.as_ref();
         let path_str = path
@@ -222,6 +223,7 @@ impl ToolLibrary {
     ///
     /// Returns [`LoadError::InitFailed`] if the tool's init function returns
     /// anything other than [`ToolResult::Ok`].
+    #[instrument(skip(self, ctx), fields(path = %self.path))]
     pub async fn init(&self, ctx: &RuntimeContext) -> Result<(), LoadError> {
         debug!(path = %self.path, "Initializing tool library");
 

@@ -36,11 +36,7 @@
 //! compiled.evaluate_pre_effects(&mut session, "dangerous.nuke", &input)?;
 //! ```
 
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use cel_interpreter::{
     Context, ParseErrors, Program, Value,
@@ -49,9 +45,10 @@ use cel_interpreter::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use thiserror::Error;
+use tracing::{debug, instrument};
 
 pub mod session;
-use session::{HistoryEvent, PolicySession};
+use session::PolicySession;
 
 /// When a policy effect should be evaluated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -150,10 +147,31 @@ pub enum PolicyError {
 pub struct CompiledEffect {
     /// The original effect definition.
     pub original: Effect,
+    /// Compiled tool pattern for matching.
+    pub tool_pattern: CompiledPattern,
     /// Compiled CEL condition program.
     pub condition: Program,
     /// Compiled CEL update expressions (variable name -> program).
     pub updates: HashMap<String, Program>,
+}
+
+/// A precompiled tool pattern for efficient matching.
+#[derive(Debug, Clone)]
+pub struct CompiledPattern {
+    segments: Vec<PatternSegment>,
+}
+
+/// A segment in a compiled pattern.
+#[derive(Debug, Clone)]
+enum PatternSegment {
+    /// Matches exactly this literal string.
+    Literal(String),
+    /// Matches any single segment (*).
+    Single,
+    /// Matches zero or more segments (**).
+    Multi,
+    /// Matches a segment with ? wildcards (pattern chars).
+    Wildcard(Vec<char>),
 }
 
 /// A compiled policy ready for evaluation.
@@ -200,6 +218,7 @@ impl Policy {
 
             compiled_effects.push(CompiledEffect {
                 original: effect.clone(),
+                tool_pattern: CompiledPattern::new(&effect.tool),
                 condition,
                 updates,
             });
@@ -213,6 +232,21 @@ impl Policy {
 }
 
 impl CompiledPolicy {
+    /// Initializes the session context with the policy's default values.
+    ///
+    /// Existing session values take precedence over policy defaults.
+    /// Returns `true` if any new values were added.
+    fn initialize_context(&self, state: &mut PolicySession) -> bool {
+        let mut modified = false;
+        for (key, value) in &self.original.context {
+            if !state.context.contains_key(key) {
+                state.context.insert(key.clone(), value.clone());
+                modified = true;
+            }
+        }
+        modified
+    }
+
     /// Evaluates all `Before` stage effects for a tool invocation.
     ///
     /// This is called before tool execution to enforce guards and optionally
@@ -222,9 +256,8 @@ impl CompiledPolicy {
     /// # CEL Context Variables
     ///
     /// - `context`: Policy session context (`HashMap`)
-    /// - `history`: Recent tool execution history (last 5 events)
     /// - `input`: Tool input JSON
-    /// - `tool`: Map with `name` key containing the tool name
+    /// - `tool`: Tool name string
     ///
     /// # Returns
     ///
@@ -237,30 +270,24 @@ impl CompiledPolicy {
     /// - Returns `PolicyError::EvalError` if CEL evaluation fails
     /// - Returns `PolicyError::GuardFailed` if a guard condition fails with a
     ///   fail message
+    #[instrument(skip(self, state, input), fields(policy = %self.original.name, tool = %tool_name))]
     pub fn evaluate_pre_effects(
         &self,
         state: &mut PolicySession,
         tool_name: &str,
         input: &JsonValue,
     ) -> Result<bool, PolicyError> {
-        let mut cel_ctx = Context::default();
-        cel_ctx.add_variable("context", to_cel_value(&state.context));
-        cel_ctx.add_variable("history", to_cel_history(&state.history));
-        cel_ctx.add_variable("input", to_cel_json(input));
-        let mut tool_map = HashMap::new();
-        tool_map.insert("name".into(), tool_name.into());
-        cel_ctx.add_variable(
-            "tool",
-            Value::Map(CelMap {
-                map: Arc::new(tool_map),
-            }),
-        );
+        debug!("Evaluating pre-effects");
+        // Initialize session context with policy defaults (existing values take
+        // precedence)
+        let initialized = self.initialize_context(state);
+        let mut cel_ctx = build_base_context(&state.context, input, tool_name);
 
-        let mut modified = false;
+        let mut modified = initialized;
 
         for effect in &self.effects {
             if effect.original.stage == PolicyStage::Before
-                && matches_tool_pattern(&effect.original.tool, tool_name)
+                && effect.tool_pattern.matches(tool_name)
             {
                 let result = effect
                     .condition
@@ -306,63 +333,43 @@ impl CompiledPolicy {
     /// # CEL Context Variables
     ///
     /// - `context`: Policy session context (`HashMap`)
-    /// - `history`: Recent tool execution history (last 5 events)
     /// - `input`: Tool input JSON
-    /// - `tool`: Map with `name` key containing the tool name
+    /// - `tool`: Tool name string
     /// - `output`: Tool output JSON (null if error)
     /// - `error`: Error message string (only present if tool failed)
-    /// - `result`: Map with `is_ok` boolean key
+    /// - `success`: Boolean indicating if tool execution succeeded
     ///
     /// # Errors
     ///
     /// Returns `PolicyError::EvalError` if CEL evaluation fails.
+    #[instrument(skip(self, state, input, output), fields(policy = %self.original.name, tool = %tool))]
     pub fn evaluate_post_effects(
         &self,
         state: &mut PolicySession,
-        tool_name: &str,
+        tool: &str,
         input: &JsonValue,
         output: Result<&JsonValue, &str>,
     ) -> Result<(), PolicyError> {
-        let mut cel_ctx = Context::default();
-        cel_ctx.add_variable("context", to_cel_value(&state.context));
-        cel_ctx.add_variable("history", to_cel_history(&state.history));
-        cel_ctx.add_variable("input", to_cel_json(input));
-
-        let mut tool_map = HashMap::new();
-        tool_map.insert("name".into(), tool_name.into());
-        cel_ctx.add_variable(
-            "tool",
-            Value::Map(CelMap {
-                map: Arc::new(tool_map),
-            }),
-        );
+        debug!("Evaluating post-effects");
+        // Initialize session context with policy defaults (existing values take
+        // precedence)
+        self.initialize_context(state);
+        let mut cel_ctx = build_base_context(&state.context, input, tool);
 
         match output {
             Ok(val) => {
                 cel_ctx.add_variable("output", to_cel_json(val));
-                cel_ctx.add_variable(
-                    "result",
-                    Value::Map(CelMap {
-                        map: Arc::new(HashMap::from([("is_ok".into(), true.into())])),
-                    }),
-                );
+                cel_ctx.add_variable("success", Value::Bool(true));
             }
             Err(e) => {
                 cel_ctx.add_variable("output", Value::Null);
                 cel_ctx.add_variable("error", Value::String(Arc::new(e.to_string())));
-                cel_ctx.add_variable(
-                    "result",
-                    Value::Map(CelMap {
-                        map: Arc::new(HashMap::from([("is_ok".into(), false.into())])),
-                    }),
-                );
+                cel_ctx.add_variable("success", Value::Bool(false));
             }
         }
 
         for effect in &self.effects {
-            if effect.original.stage == PolicyStage::After
-                && matches_tool_pattern(&effect.original.tool, tool_name)
-            {
+            if effect.original.stage == PolicyStage::After && effect.tool_pattern.matches(tool) {
                 let result = effect
                     .condition
                     .execute(&cel_ctx)
@@ -384,38 +391,74 @@ impl CompiledPolicy {
             }
         }
 
-        state.history.push(HistoryEvent {
-            tool: tool_name.to_string(),
-            input: input.clone(),
-            success: output.is_ok(),
-            output: output.ok().cloned(),
-            error: output.err().map(ToString::to_string),
-            timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        });
-
         Ok(())
     }
 }
 
-/// Checks if a tool name matches a pattern.
-///
-/// # Patterns
-///
-/// - `"*"`: Matches all tools
-/// - `"group.*"`: Matches `group` and any tool with a `group.` prefix (e.g.,
-///   `group.subtool`)
-/// - `"exact_name"`: Matches only the exact tool name
+impl CompiledPattern {
+    /// Compiles a pattern string into a `CompiledPattern`.
+    pub fn new(pattern: &str) -> Self {
+        let segments = pattern
+            .split('.')
+            .map(|s| {
+                if s == "**" {
+                    PatternSegment::Multi
+                } else if s == "*" {
+                    PatternSegment::Single
+                } else if s.contains('?') {
+                    PatternSegment::Wildcard(s.chars().collect())
+                } else {
+                    PatternSegment::Literal(s.to_string())
+                }
+            })
+            .collect();
+        Self { segments }
+    }
+
+    /// Checks if the pattern matches the given tool name.
+    pub fn matches(&self, tool_id: &str) -> bool {
+        let tool_parts: Vec<&str> = tool_id.split('.').collect();
+        Self::matches_segments(&self.segments, &tool_parts)
+    }
+
+    fn matches_segments(pattern: &[PatternSegment], tool: &[&str]) -> bool {
+        match (pattern.first(), tool.first()) {
+            (None, None) => true,
+            (None, Some(_)) => false,
+            (Some(_), None) => pattern.iter().all(|p| matches!(p, PatternSegment::Multi)),
+            (Some(p), Some(&t)) => match p {
+                PatternSegment::Multi => {
+                    // ** can match zero or more segments
+                    Self::matches_segments(&pattern[1..], tool)
+                        || Self::matches_segments(pattern, &tool[1..])
+                }
+                PatternSegment::Single => Self::matches_segments(&pattern[1..], &tool[1..]),
+                PatternSegment::Literal(lit) if lit == t => {
+                    Self::matches_segments(&pattern[1..], &tool[1..])
+                }
+                PatternSegment::Wildcard(chars) if Self::matches_wildcard(chars, t) => {
+                    Self::matches_segments(&pattern[1..], &tool[1..])
+                }
+                _ => false,
+            },
+        }
+    }
+
+    fn matches_wildcard(pattern: &[char], segment: &str) -> bool {
+        let s_chars: Vec<char> = segment.chars().collect();
+        if pattern.len() != s_chars.len() {
+            return false;
+        }
+        pattern
+            .iter()
+            .zip(s_chars.iter())
+            .all(|(p, s)| *p == '?' || p == s)
+    }
+}
+
+#[cfg(test)]
 fn matches_tool_pattern(pattern: &str, tool_id: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    if let Some(prefix) = pattern.strip_suffix(".*") {
-        return tool_id == prefix || tool_id.starts_with(&format!("{prefix}."));
-    }
-    pattern == tool_id
+    CompiledPattern::new(pattern).matches(tool_id)
 }
 
 /// Converts a `serde_json::Value` to a CEL `Value`.
@@ -455,6 +498,19 @@ fn to_cel_value(map: &HashMap<String, JsonValue>) -> Value {
     Value::Map(CelMap { map: Arc::new(m) })
 }
 
+/// Builds the base CEL context with common variables.
+fn build_base_context(
+    context: &HashMap<String, JsonValue>,
+    input: &JsonValue,
+    tool: &str,
+) -> Context<'static> {
+    let mut cel_ctx = Context::default();
+    cel_ctx.add_variable("context", to_cel_value(context));
+    cel_ctx.add_variable("input", to_cel_json(input));
+    cel_ctx.add_variable("tool", Value::String(Arc::new(tool.to_string())));
+    cel_ctx
+}
+
 /// Converts a CEL `Value` back to a `serde_json::Value`.
 fn cel_to_json(v: Value) -> JsonValue {
     match v {
@@ -476,27 +532,6 @@ fn cel_to_json(v: Value) -> JsonValue {
         }
         _ => JsonValue::String(format!("{v:?}")),
     }
-}
-
-/// Maximum number of history events exposed to CEL expressions.
-const MAX_HISTORY_ITEMS: usize = 5;
-
-/// Converts history events to a CEL list value.
-///
-/// Returns the last `MAX_HISTORY_ITEMS` events (most recent).
-fn to_cel_history(hist: &[HistoryEvent]) -> Value {
-    let start = hist.len().saturating_sub(MAX_HISTORY_ITEMS);
-    let list: Vec<Value> = hist[start..]
-        .iter()
-        .map(|e| {
-            let mut m = HashMap::new();
-            m.insert("tool".into(), Value::String(Arc::new(e.tool.clone())));
-            m.insert("success".into(), Value::Bool(e.success));
-            Value::Map(CelMap { map: Arc::new(m) })
-        })
-        .collect();
-
-    Value::List(Arc::new(list))
 }
 
 #[cfg(test)]
@@ -550,7 +585,7 @@ mod tests {
             effects: vec![Effect {
                 tool: "git.commit".into(),
                 stage: PolicyStage::After,
-                condition: "result.is_ok".into(),
+                condition: "success".into(),
                 fail_message: None,
                 updates: HashMap::from([
                     ("last_hash".into(), "output.hash".into()),
@@ -572,18 +607,36 @@ mod tests {
 
         assert_eq!(state.context.get("last_hash"), Some(&json!("abc-123")));
         assert_eq!(state.context.get("commit_count"), Some(&json!(1)));
-        assert_eq!(state.history.len(), 1);
     }
     #[test]
-    fn test_matches_tool_pattern_correctness() {
-        // "group.*" should match "group.thing"
-        assert!(matches_tool_pattern("group.*", "group.thing"));
+    fn test_matches_tool_pattern_glob() {
+        // Exact match
+        assert!(matches_tool_pattern("foo.bar", "foo.bar"));
+        assert!(!matches_tool_pattern("foo.bar", "foo.baz"));
 
-        // "group.*" should NOT match "groupie.thing"
-        assert!(
-            !matches_tool_pattern("group.*", "groupie.thing"),
-            "Bug 1: group.* matched groupie.thing (prefix issue)"
-        );
+        // Single wildcard (*) matches exactly one segment
+        assert!(matches_tool_pattern("foo.*", "foo.bar"));
+        assert!(!matches_tool_pattern("foo.*", "foo.bar.baz"));
+        assert!(!matches_tool_pattern("foo.*", "foobar"));
+        assert!(!matches_tool_pattern("group.*", "groupie.thing"));
+
+        // Double wildcard (**) matches zero or more segments
+        assert!(matches_tool_pattern("foo.**", "foo"));
+        assert!(matches_tool_pattern("foo.**", "foo.bar"));
+        assert!(matches_tool_pattern("foo.**", "foo.bar.baz"));
+        assert!(matches_tool_pattern("**", "anything.at.all"));
+        assert!(matches_tool_pattern("foo.**.baz", "foo.baz"));
+        assert!(matches_tool_pattern("foo.**.baz", "foo.bar.baz"));
+        assert!(matches_tool_pattern("foo.**.baz", "foo.bar.qux.baz"));
+
+        // Single char wildcard (?)
+        assert!(matches_tool_pattern("foo.b?r", "foo.bar"));
+        assert!(matches_tool_pattern("foo.b?r", "foo.bxr"));
+        assert!(!matches_tool_pattern("foo.b?r", "foo.baar"));
+
+        // Mixed patterns
+        assert!(matches_tool_pattern("*.bar", "foo.bar"));
+        assert!(matches_tool_pattern("**.bar", "foo.baz.bar"));
     }
 
     #[tokio::test]
@@ -614,50 +667,8 @@ mod tests {
             .await;
         assert!(res.is_ok(), "evaluate_post_effects failed: {:?}", res.err());
 
-        // Check if history was saved
+        // Check session was saved
         let session = store.load(session_id).await.unwrap();
-        assert_eq!(
-            session.history.len(),
-            1,
-            "Bug 2: History was not saved when no policy effects triggered"
-        );
         assert_eq!(session.version, 1, "Version should be 1");
-    }
-
-    #[test]
-    fn test_history_truncation() {
-        let mut history = Vec::new();
-        for i in 0..60 {
-            history.push(HistoryEvent {
-                tool: format!("tool_{i}"),
-                input: json!({}),
-                success: true,
-                output: None,
-                error: None,
-                timestamp: 0,
-            });
-        }
-
-        let cel_val = to_cel_history(&history);
-        match cel_val {
-            Value::List(list) => {
-                assert_eq!(list.len(), 5);
-                // Verify it's the *last* 5 items (55 to 59)
-                let first_item = &list[0];
-                match first_item {
-                    Value::Map(m) => {
-                        let tool_key = Key::String(Arc::new("tool".to_string()));
-                        let tool_val = m.map.get(&tool_key).expect("tool key missing");
-                        if let Value::String(s) = tool_val {
-                            assert_eq!(s.as_str(), "tool_55");
-                        } else {
-                            panic!("tool is not string");
-                        }
-                    }
-                    _ => panic!("item is not map"),
-                }
-            }
-            _ => panic!("Expected CEL List"),
-        }
     }
 }

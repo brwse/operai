@@ -154,7 +154,6 @@ pub mod toolbox_client {
  Request headers:
    x-request-id: Unique request identifier for tracing.
    x-session-id: Optional session identifier for stateful tools.
-   x-user-id: Authenticated user identifier.
    x-credential-{name}: Base64-encoded JSON of CredentialData for each
                         credential required by the tool.
                         Example: x-credential-github: eyJ2YWx1ZXMiOnsi...
@@ -224,7 +223,6 @@ pub mod toolbox_server {
  Request headers:
    x-request-id: Unique request identifier for tracing.
    x-session-id: Optional session identifier for stateful tools.
-   x-user-id: Authenticated user identifier.
    x-credential-{name}: Base64-encoded JSON of CredentialData for each
                         credential required by the tool.
                         Example: x-credential-github: eyJ2YWx1ZXMiOnsi...

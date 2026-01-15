@@ -43,7 +43,6 @@ The `Context` struct provides access to:
 
 - `request_id()` — Unique request identifier
 - `session_id()` — Session identifier for stateful tools
-- `user_id()` — Authenticated user identifier
 - `system_credential::<T>(name)` — System-level credentials
 - `user_credential::<T>(name)` — User-provided credentials
 

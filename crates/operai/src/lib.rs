@@ -52,7 +52,7 @@
 //! ## Context
 //!
 //! The `Context` parameter provides access to:
-//! - `request_id()`, `session_id()`, `user_id()` - Request metadata
+//! - `request_id()`, `session_id()` - Request metadata
 //! - `system_credential(name)` - System-level credentials
 //! - `user_credential(name)` - User-provided credentials
 //!
@@ -339,7 +339,6 @@ mod tests {
         #[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
         pub(super) struct GreetOutput {
             pub(super) message: String,
-            pub(super) user_id: String,
         }
 
         /// # Greet (ID: greet)
@@ -352,10 +351,9 @@ mod tests {
         /// ## Tags
         /// - greeting
         #[tool]
-        async fn greet(ctx: Context, input: GreetInput) -> Result<GreetOutput> {
+        async fn greet(_ctx: Context, input: GreetInput) -> Result<GreetOutput> {
             Ok(GreetOutput {
                 message: format!("Hello, {}!", input.name),
-                user_id: ctx.user_id().to_string(),
             })
         }
 
@@ -443,7 +441,6 @@ mod tests {
     fn call_args<'a>(
         request_id: &'a str,
         session_id: &'a str,
-        user_id: &'a str,
         tool_id: &'a str,
         input_json: &'a [u8],
     ) -> operai_abi::CallArgs<'a> {
@@ -455,7 +452,6 @@ mod tests {
         let call_ctx = CallContext {
             request_id: RStr::from_str(request_id),
             session_id: RStr::from_str(session_id),
-            user_id: RStr::from_str(user_id),
             user_credentials: RSlice::from_slice(&[]),
             system_credentials: RSlice::from_slice(&[]),
         };
@@ -594,7 +590,6 @@ mod tests {
 
         assert!(schema_contains_property(&input_schema, "name"));
         assert!(schema_contains_property(&output_schema, "message"));
-        assert!(schema_contains_property(&output_schema, "user_id"));
 
         assert!(matches!(
             greet.credential_schema,
@@ -642,7 +637,7 @@ mod tests {
         let input = serde_json::json!({ "name": "Alice" });
         let input_json = serde_json::to_vec(&input).unwrap();
 
-        let args = call_args("req-123", "sess-456", "user-789", "greet", &input_json);
+        let args = call_args("req-123", "sess-456", "greet", &input_json);
 
         // Act
         let result = (module.call())(args).await;
@@ -655,7 +650,6 @@ mod tests {
             output,
             test_tool_library::GreetOutput {
                 message: "Hello, Alice!".to_string(),
-                user_id: "user-789".to_string(),
             }
         );
     }
@@ -665,13 +659,7 @@ mod tests {
         // Arrange
         let module = test_tool_library::get_root_module();
         let input_json = b"{}";
-        let args = call_args(
-            "req-123",
-            "sess-456",
-            "user-789",
-            "does_not_exist",
-            input_json,
-        );
+        let args = call_args("req-123", "sess-456", "does_not_exist", input_json);
 
         // Act
         let result = (module.call())(args).await;
@@ -686,7 +674,7 @@ mod tests {
         // Arrange
         let module = test_tool_library::get_root_module();
         let input_json = b"{}";
-        let args = call_args("req-123", "sess-456", "user-789", "greet", input_json);
+        let args = call_args("req-123", "sess-456", "greet", input_json);
 
         // Act
         let result = (module.call())(args).await;
@@ -702,7 +690,7 @@ mod tests {
         // Arrange
         let module = test_tool_library::get_root_module();
         let input_json = b"{}";
-        let args = call_args("req-123", "sess-456", "user-789", "fail", input_json);
+        let args = call_args("req-123", "sess-456", "fail", input_json);
 
         // Act
         let result = (module.call())(args).await;
@@ -717,7 +705,7 @@ mod tests {
         // Arrange
         let module = test_tool_library::get_root_module();
         let input_json = b"{ invalid json }";
-        let args = call_args("req-123", "sess-456", "user-789", "greet", input_json);
+        let args = call_args("req-123", "sess-456", "greet", input_json);
 
         // Act
         let result = (module.call())(args).await;
@@ -737,7 +725,7 @@ mod tests {
         let module = test_tool_library::get_root_module();
         let input_json = b"{}";
         // The 'fail' tool has FailInput with no required fields
-        let args = call_args("req-123", "sess-456", "user-789", "fail", input_json);
+        let args = call_args("req-123", "sess-456", "fail", input_json);
 
         // Act
         let result = (module.call())(args).await;
@@ -814,7 +802,6 @@ mod tests {
         // Arrange
         let output = test_tool_library::GreetOutput {
             message: "Hello, World!".to_string(),
-            user_id: "user-123".to_string(),
         };
 
         // Act

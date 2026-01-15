@@ -169,7 +169,6 @@ Server::builder()
 | --------------------- | ------------------------------ |
 | `x-request-id`        | Unique request identifier      |
 | `x-session-id`        | Session identifier             |
-| `x-user-id`           | User identifier                |
 | `x-credential-{name}` | Base64-encoded credential data |
 
 ### MCP Transport (Feature-Gated)

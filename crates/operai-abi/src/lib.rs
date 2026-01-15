@@ -200,8 +200,6 @@ pub struct CallContext<'a> {
     pub request_id: RStr<'a>,
     /// Session identifier for grouping related requests.
     pub session_id: RStr<'a>,
-    /// User identifier making the request.
-    pub user_id: RStr<'a>,
     /// User-specific credentials as serialized bytes.
     /// Format: binary-serialized `HashMap<String, HashMap<String, String>>`.
     pub user_credentials: RSlice<'a, u8>,
@@ -438,7 +436,6 @@ mod tests {
         let context = CallContext {
             request_id: RStr::from("req-123"),
             session_id: RStr::from("sess-456"),
-            user_id: RStr::from("user-789"),
             user_credentials: RSlice::from_slice(&[1, 2, 3]),
             system_credentials: RSlice::from_slice(&[4, 5, 6]),
         };
@@ -449,7 +446,6 @@ mod tests {
 
         assert_eq!(args.context.request_id.as_str(), "req-123");
         assert_eq!(args.context.session_id.as_str(), "sess-456");
-        assert_eq!(args.context.user_id.as_str(), "user-789");
         assert_eq!(args.context.user_credentials.as_slice(), &[1, 2, 3]);
         assert_eq!(args.context.system_credentials.as_slice(), &[4, 5, 6]);
         assert_eq!(args.tool_id.as_str(), "greet");
@@ -539,7 +535,6 @@ mod tests {
         let original = CallContext {
             request_id: RStr::from("req-123"),
             session_id: RStr::from("sess-456"),
-            user_id: RStr::from("user-789"),
             user_credentials: RSlice::from_slice(&[1, 2, 3]),
             system_credentials: RSlice::from_slice(&[4, 5, 6]),
         };
@@ -547,7 +542,7 @@ mod tests {
 
         // Both should be usable after copy (not moved)
         assert_eq!(original.request_id.as_str(), copied.request_id.as_str());
-        assert_eq!(original.user_id.as_str(), copied.user_id.as_str());
+        assert_eq!(original.session_id.as_str(), copied.session_id.as_str());
     }
 
     #[test]
@@ -571,14 +566,12 @@ mod tests {
         let context = CallContext {
             request_id: RStr::from(""),
             session_id: RStr::from(""),
-            user_id: RStr::from(""),
             user_credentials: RSlice::from_slice(&[]),
             system_credentials: RSlice::from_slice(&[]),
         };
 
         assert!(context.request_id.as_str().is_empty());
         assert!(context.session_id.as_str().is_empty());
-        assert!(context.user_id.as_str().is_empty());
         assert!(context.user_credentials.as_slice().is_empty());
         assert!(context.system_credentials.as_slice().is_empty());
     }
@@ -588,7 +581,6 @@ mod tests {
         let context = CallContext {
             request_id: RStr::from("req"),
             session_id: RStr::from("sess"),
-            user_id: RStr::from("user"),
             user_credentials: RSlice::from_slice(&[]),
             system_credentials: RSlice::from_slice(&[]),
         };

@@ -61,7 +61,7 @@ use operai_abi::{
     ToolResult,
 };
 use rkyv::rancor::BoxedError;
-use tracing::{info, instrument};
+use tracing::{debug, instrument};
 
 use crate::loader::{LoadError, ToolLibrary};
 
@@ -497,7 +497,7 @@ impl ToolRegistry {
                 tool_id,
             };
 
-            info!(qualified_id = %qualified_id, "Registered tool");
+            debug!(qualified_id = %qualified_id, "Registered tool");
             self.tools.insert(qualified_id, Arc::new(handle));
         }
 
@@ -575,6 +575,7 @@ impl ToolRegistry {
     /// - Returns an empty vector if `query_embedding` is empty
     /// - Results are sorted by descending similarity score
     #[must_use]
+    #[instrument(skip(self, query_embedding), fields(embedding_dims = query_embedding.len(), limit = %limit))]
     pub fn search(&self, query_embedding: &[f32], limit: usize) -> Vec<(&ToolInfo, f32)> {
         if query_embedding.is_empty() || limit == 0 {
             return Vec::new();
@@ -1130,7 +1131,6 @@ mod tests {
         let context = CallContext {
             request_id: RStr::from_str("request"),
             session_id: RStr::from_str("session"),
-            user_id: RStr::from_str("user"),
             user_credentials: RSlice::from_slice(&[]),
             system_credentials: RSlice::from_slice(&[]),
         };

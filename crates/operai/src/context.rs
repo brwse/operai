@@ -33,13 +33,12 @@ use crate::credential::CredentialError;
 
 /// Execution context for a tool invocation.
 ///
-/// Contains metadata (request, session, and user IDs) and credential stores for
+/// Contains metadata (request and session IDs) and credential stores for
 /// accessing system and user credentials during tool execution.
 #[derive(Debug, Clone)]
 pub struct Context {
     request_id: String,
     session_id: String,
-    user_id: String,
     system_credentials: HashMap<String, HashMap<String, String>>,
     user_credentials: HashMap<String, HashMap<String, String>>,
 }
@@ -60,7 +59,6 @@ impl Context {
     pub fn __from_call_context(call_ctx: &CallContext<'_>) -> Self {
         let request_id = call_ctx.request_id.to_string();
         let session_id = call_ctx.session_id.to_string();
-        let user_id = call_ctx.user_id.to_string();
 
         let user_credentials: HashMap<String, HashMap<String, String>> =
             if call_ctx.user_credentials.is_empty() {
@@ -81,7 +79,6 @@ impl Context {
         Self {
             request_id,
             session_id,
-            user_id,
             system_credentials,
             user_credentials,
         }
@@ -97,7 +94,6 @@ impl Context {
         Self {
             request_id: String::new(),
             session_id: String::new(),
-            user_id: String::new(),
             system_credentials: HashMap::new(),
             user_credentials: HashMap::new(),
         }
@@ -105,11 +101,10 @@ impl Context {
 
     /// Creates a context with the specified metadata but no credentials.
     #[must_use]
-    pub fn with_metadata(request_id: &str, session_id: &str, user_id: &str) -> Self {
+    pub fn with_metadata(request_id: &str, session_id: &str) -> Self {
         Self {
             request_id: request_id.to_string(),
             session_id: session_id.to_string(),
-            user_id: user_id.to_string(),
             system_credentials: HashMap::new(),
             user_credentials: HashMap::new(),
         }
@@ -125,12 +120,6 @@ impl Context {
     #[must_use]
     pub fn session_id(&self) -> &str {
         &self.session_id
-    }
-
-    /// Returns the user ID for this invocation.
-    #[must_use]
-    pub fn user_id(&self) -> &str {
-        &self.user_id
     }
 
     /// Retrieves and deserializes a system credential.
@@ -218,15 +207,13 @@ mod tests {
         let ctx = Context::empty();
         assert!(ctx.request_id().is_empty());
         assert!(ctx.session_id().is_empty());
-        assert!(ctx.user_id().is_empty());
     }
 
     #[test]
     fn test_context_with_metadata() {
-        let ctx = Context::with_metadata("req-123", "sess-456", "user-789");
+        let ctx = Context::with_metadata("req-123", "sess-456");
         assert_eq!(ctx.request_id(), "req-123");
         assert_eq!(ctx.session_id(), "sess-456");
-        assert_eq!(ctx.user_id(), "user-789");
     }
 
     #[test]
@@ -333,12 +320,10 @@ mod tests {
 
         let request_id = "req-123".to_string();
         let session_id = "sess-456".to_string();
-        let user_id = "user-789".to_string();
 
         let call_ctx = CallContext {
             request_id: RStr::from_str(&request_id),
             session_id: RStr::from_str(&session_id),
-            user_id: RStr::from_str(&user_id),
             user_credentials: RSlice::from_slice(&user_creds_bin),
             system_credentials: RSlice::from_slice(&system_creds_bin),
         };
@@ -349,7 +334,6 @@ mod tests {
         // Assert
         assert_eq!(ctx.request_id(), "req-123");
         assert_eq!(ctx.session_id(), "sess-456");
-        assert_eq!(ctx.user_id(), "user-789");
 
         let system_cred: TestCred = ctx.system_credential("api").unwrap();
         assert_eq!(system_cred.api_key, "sys-secret");
@@ -394,8 +378,8 @@ mod tests {
         let mut values = HashMap::new();
         values.insert("api_key".to_string(), "secret".to_string());
 
-        let original = Context::with_metadata("req-1", "sess-1", "user-1")
-            .with_system_credential("api", values);
+        let original =
+            Context::with_metadata("req-1", "sess-1").with_system_credential("api", values);
 
         // Act
         let cloned = original.clone();
@@ -403,7 +387,6 @@ mod tests {
         // Assert
         assert_eq!(cloned.request_id(), "req-1");
         assert_eq!(cloned.session_id(), "sess-1");
-        assert_eq!(cloned.user_id(), "user-1");
 
         let cred: TestCred = cloned.system_credential("api").unwrap();
         assert_eq!(cred.api_key, "secret");
@@ -451,12 +434,10 @@ mod tests {
         // Arrange
         let request_id = "req-123".to_string();
         let session_id = "sess-456".to_string();
-        let user_id = "user-789".to_string();
 
         let call_ctx = CallContext {
             request_id: RStr::from_str(&request_id),
             session_id: RStr::from_str(&session_id),
-            user_id: RStr::from_str(&user_id),
             user_credentials: RSlice::from_slice(&[]),
             system_credentials: RSlice::from_slice(&[]),
         };
@@ -473,7 +454,7 @@ mod tests {
     #[test]
     fn test_context_debug_output_includes_metadata() {
         // Arrange
-        let ctx = Context::with_metadata("req-abc", "sess-xyz", "user-123");
+        let ctx = Context::with_metadata("req-abc", "sess-xyz");
 
         // Act
         let debug = format!("{ctx:?}");
@@ -481,6 +462,5 @@ mod tests {
         // Assert
         assert!(debug.contains("req-abc"));
         assert!(debug.contains("sess-xyz"));
-        assert!(debug.contains("user-123"));
     }
 }

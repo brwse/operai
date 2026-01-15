@@ -75,7 +75,6 @@ pub enum ToolResult {
 
 - `request_id` — Unique request identifier
 - `session_id` — Session identifier for stateful tools
-- `user_id` — Authenticated user identifier
 - `system_credentials` — rkyv-encoded system credentials
 - `user_credentials` — rkyv-encoded user credentials
 

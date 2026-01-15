@@ -3,7 +3,7 @@
 //!
 //! This module provides the storage and runtime infrastructure for maintaining
 //! policy evaluation state across multiple tool executions. Sessions track
-//! context variables and execution history, enabling policies to make decisions
+//! context variables, enabling policies to make decisions
 //! based on prior operations.
 //!
 //! # Key Concepts
@@ -51,6 +51,7 @@ use backon::{ExponentialBuilder, Retryable};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use thiserror::Error;
+use tracing::{debug, instrument, warn};
 
 use super::{CompiledPolicy, Policy};
 
@@ -64,7 +65,6 @@ use super::{CompiledPolicy, Policy};
 ///
 /// - `version`: Monotonically increasing version number for OCC
 /// - `context`: Arbitrary key-value pairs accessible in CEL expressions
-/// - `history`: Ordered record of tool execution events
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PolicySession {
     /// Version number for optimistic concurrency control.
@@ -78,40 +78,6 @@ pub struct PolicySession {
     /// This map is exposed as the `context` variable in CEL conditions and
     /// effect updates. Policies can read and modify these values.
     pub context: HashMap<String, JsonValue>,
-    /// Chronological history of tool executions.
-    ///
-    /// Events are appended during post-effects evaluation. The most recent
-    /// events (up to 5) are exposed as the `history` variable in CEL
-    /// expressions.
-    pub history: Vec<HistoryEvent>,
-}
-
-/// A record of a single tool execution attempt.
-///
-/// History events are appended to session history during post-effects
-/// evaluation and are exposed to CEL expressions via the `history` variable.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HistoryEvent {
-    /// Name/identifier of the tool that was executed.
-    pub tool: String,
-    /// Input parameters passed to the tool.
-    pub input: JsonValue,
-    /// Whether the tool execution succeeded.
-    pub success: bool,
-    /// Output value if execution succeeded.
-    ///
-    /// This field is serialized only when present. When `success` is false,
-    /// this field should be `None` and `error` should be set instead.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output: Option<JsonValue>,
-    /// Error message if execution failed.
-    ///
-    /// This field is serialized only when present. When `success` is true,
-    /// this field should be `None` and `output` should be set instead.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    /// Timestamp of the execution (epoch seconds).
-    pub timestamp: u64,
 }
 
 /// Errors that can occur during session storage operations.
@@ -193,6 +159,7 @@ impl InMemoryPolicySessionStore {
 
 #[async_trait]
 impl PolicySessionStore for InMemoryPolicySessionStore {
+    #[instrument(skip(self), fields(session_id = %session_id))]
     async fn load(&self, session_id: &str) -> Result<PolicySession, SessionError> {
         let map = self
             .sessions
@@ -201,6 +168,7 @@ impl PolicySessionStore for InMemoryPolicySessionStore {
         Ok(map.get(session_id).cloned().unwrap_or_default())
     }
 
+    #[instrument(skip(self, session), fields(session_id = %session_id, version = session.version))]
     async fn save(&self, session_id: &str, session: &PolicySession) -> Result<(), SessionError> {
         let mut map = self
             .sessions
@@ -235,8 +203,7 @@ impl PolicySessionStore for InMemoryPolicySessionStore {
 /// Policies are evaluated in two stages:
 /// - **Pre-effects**: Before tool execution, can block execution or modify
 ///   context
-/// - **Post-effects**: After tool execution, can modify context and append
-///   history
+/// - **Post-effects**: After tool execution, can modify context
 ///
 /// # Concurrency
 ///
@@ -268,7 +235,9 @@ impl PolicyStore {
     ///
     /// Returns `Err(PolicyError)` if the policy fails to compile or if the
     /// policy lock is poisoned.
+    #[instrument(skip(self, policy), fields(policy_name = %policy.name))]
     pub fn register(&self, policy: Policy) -> Result<(), PolicyError> {
+        debug!("Registering policy");
         let compiled = policy.compile()?;
         let mut map = self
             .policies
@@ -312,6 +281,7 @@ impl PolicyStore {
     ///
     /// Panics if the policy lock is poisoned (indicating a previous writer
     /// thread panicked while holding the read lock).
+    #[instrument(skip(self, input), fields(session_id = %session_id, tool = %tool))]
     pub async fn evaluate_pre_effects(
         &self,
         session_id: &str,
@@ -370,15 +340,13 @@ impl PolicyStore {
     /// Evaluate post-effects for all registered policies.
     ///
     /// This method evaluates the "after" stage of all policies that match the
-    /// given tool. It always appends a history event and saves the session,
-    /// even if no policies modified the context.
+    /// given tool.
     ///
     /// # Behavior
     ///
     /// - Loads the session from storage
     /// - Evaluates all matching post-effects
-    /// - Appends a history event for the tool execution
-    /// - Saves the session (always, to persist history)
+    /// - Saves the session if context was modified
     /// - Retries up to 3 times on conflict
     ///
     /// # Panics
@@ -390,6 +358,7 @@ impl PolicyStore {
     ///
     /// Returns `PolicyError::EvalError` if session operations fail after
     /// retries.
+    #[instrument(skip(self, input, output), fields(session_id = %session_id, tool = %tool))]
     pub async fn evaluate_post_effects(
         &self,
         session_id: &str,

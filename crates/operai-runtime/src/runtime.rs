@@ -43,7 +43,7 @@ use operai_abi::{CallContext, RuntimeContext, ToolResult};
 use operai_core::{PolicyError, ToolInfo, ToolRegistry, policy::session::PolicyStore};
 use rkyv::rancor::BoxedError;
 use tonic::{Request, Status, transport::Channel};
-use tracing::{error, info};
+use tracing::{Span, debug, error, info, instrument};
 
 use crate::proto::{
     CallToolRequest, CallToolResponse, ListToolsRequest, ListToolsResponse, SearchResult,
@@ -54,16 +54,13 @@ use crate::proto::{
 /// Metadata associated with a tool invocation request.
 ///
 /// This struct carries context information for tool calls, including
-/// identifiers for tracing, user authorization, and credentials for accessing
-/// external services.
+/// identifiers for tracing and credentials for accessing external services.
 #[derive(Debug, Clone, Default)]
 pub struct CallMetadata {
     /// Unique identifier for this request (useful for tracing and logging).
     pub request_id: String,
     /// Session identifier for grouping related requests.
     pub session_id: String,
-    /// User identifier making the request.
-    pub user_id: String,
     /// Credentials keyed by provider name (e.g., "github", "slack").
     /// Each provider maps to a set of key-value credential pairs.
     pub credentials: HashMap<String, HashMap<String, String>>,
@@ -248,6 +245,7 @@ impl LocalRuntime {
     /// # Errors
     ///
     /// This function currently never returns an error.
+    #[instrument(skip(self, request), fields(page_size = request.page_size))]
     pub async fn list_tools(&self, request: ListToolsRequest) -> Result<ListToolsResponse, Status> {
         let page_size: usize = if request.page_size <= 0 {
             100
@@ -287,6 +285,7 @@ impl LocalRuntime {
     /// Returns `Status::invalid_argument` if neither `query_embedding` nor
     /// `query_text` is provided. Returns `Status::invalid_argument` if
     /// `query_text` is provided but no search embedder is configured.
+    #[instrument(skip(self, request), fields(embedding_dims = tracing::field::Empty, query_type = tracing::field::Empty))]
     pub async fn search_tools(
         &self,
         request: SearchToolsRequest,
@@ -362,6 +361,14 @@ impl LocalRuntime {
     /// - `permission_denied`: Pre-call policy rejected the request
     /// - `internal`: Policy evaluation error, serialization failure, or tool
     ///   panic
+    #[instrument(
+        skip(self, request, metadata),
+        fields(
+            request_id = %metadata.request_id,
+            session_id = %metadata.session_id,
+            tool_id = tracing::field::Empty
+        )
+    )]
     pub async fn call_tool(
         &self,
         request: CallToolRequest,
@@ -375,7 +382,10 @@ impl LocalRuntime {
             .get(tool_id)
             .ok_or_else(|| Status::not_found(format!("tool not found: {tool_id}")))?;
 
-        info!(tool_id = %tool_id, request_id = %metadata.request_id, "Invoking tool");
+        // Record the tool_id into the current span
+        Span::current().record("tool_id", tool_id);
+
+        debug!("Invoking tool");
 
         let inflight_guard = self.registry.start_request_guard();
 
@@ -401,7 +411,6 @@ impl LocalRuntime {
         let context = CallContext {
             request_id: RStr::from_str(&metadata.request_id),
             session_id: RStr::from_str(&metadata.session_id),
-            user_id: RStr::from_str(&metadata.user_id),
             user_credentials: RSlice::from_slice(&user_creds_bin),
             system_credentials: RSlice::from_slice(system_creds_bin),
         };
@@ -537,6 +546,7 @@ impl RemoteRuntime {
     ///
     /// Returns `Status` if the gRPC request fails or if invalid metadata is
     /// provided.
+    #[instrument(skip(self, request, metadata), fields(request_id = %metadata.request_id))]
     pub async fn call_tool(
         &self,
         request: CallToolRequest,
@@ -667,7 +677,6 @@ fn normalize_endpoint(endpoint: &str) -> String {
 /// Adds the following headers:
 /// - `x-request-id`: Request identifier
 /// - `x-session-id`: Session identifier
-/// - `x-user-id`: User identifier
 /// - `x-credential-{provider}`: Base64-encoded credential data for each
 ///   provider
 ///
@@ -683,7 +692,6 @@ fn apply_call_metadata(
 
     insert_header(headers, "x-request-id", &metadata.request_id)?;
     insert_header(headers, "x-session-id", &metadata.session_id)?;
-    insert_header(headers, "x-user-id", &metadata.user_id)?;
 
     for (provider, values) in &metadata.credentials {
         let json = serde_json::to_string(&CredentialData { values })

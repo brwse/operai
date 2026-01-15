@@ -9,7 +9,6 @@
 //! The service extracts metadata from gRPC request headers:
 //! - `x-request-id`: Request identifier for tracing
 //! - `x-session-id`: Session identifier for policy evaluation
-//! - `x-user-id`: User identifier for authorization
 //! - `x-credential-*`: Base64-encoded JSON credentials for external services
 //!
 //! # Credentials Format
@@ -77,15 +76,14 @@ impl ToolboxService {
 
     /// Extracts metadata headers from a gRPC request.
     ///
-    /// Returns a tuple of `(request_id, session_id, user_id)`. Missing headers
+    /// Returns a tuple of `(request_id, session_id)`. Missing headers
     /// are returned as empty strings.
     ///
     /// # Headers Extracted
     ///
     /// - `x-request-id`: Unique request identifier
     /// - `x-session-id`: Session identifier for policy evaluation
-    /// - `x-user-id`: User identifier for authorization
-    fn extract_metadata<T>(request: &Request<T>) -> (String, String, String) {
+    fn extract_metadata<T>(request: &Request<T>) -> (String, String) {
         let get = |key| {
             request
                 .metadata()
@@ -94,7 +92,7 @@ impl ToolboxService {
                 .unwrap_or("")
                 .to_string()
         };
-        (get("x-request-id"), get("x-session-id"), get("x-user-id"))
+        (get("x-request-id"), get("x-session-id"))
     }
 
     /// Extracts user credentials from gRPC request metadata headers.
@@ -186,7 +184,7 @@ impl Toolbox for ToolboxService {
     /// Invokes a tool with the provided input and metadata.
     ///
     /// This method:
-    /// 1. Extracts request metadata (`request_id`, `session_id`, `user_id`)
+    /// 1. Extracts request metadata (`request_id`, `session_id`)
     /// 2. Parses user credentials from headers
     /// 3. Validates the tool name format
     /// 4. Enforces pre-call policy evaluation
@@ -202,12 +200,11 @@ impl Toolbox for ToolboxService {
         &self,
         request: Request<CallToolRequest>,
     ) -> Result<Response<CallToolResponse>, Status> {
-        let (request_id, session_id, user_id) = Self::extract_metadata(&request);
+        let (request_id, session_id) = Self::extract_metadata(&request);
         let user_creds = Self::extract_credentials(&request);
         let metadata = CallMetadata {
             request_id,
             session_id,
-            user_id,
             credentials: user_creds,
         };
 
@@ -844,12 +841,11 @@ mod tests {
         let request = Request::new(());
 
         // Act
-        let (request_id, session_id, user_id) = ToolboxService::extract_metadata(&request);
+        let (request_id, session_id) = ToolboxService::extract_metadata(&request);
 
         // Assert
         assert_eq!(request_id, "");
         assert_eq!(session_id, "");
-        assert_eq!(user_id, "");
     }
 
     #[test]
@@ -862,17 +858,13 @@ mod tests {
         request
             .metadata_mut()
             .insert("x-session-id", "sess-xyz".parse().unwrap());
-        request
-            .metadata_mut()
-            .insert("x-user-id", "user-123".parse().unwrap());
 
         // Act
-        let (request_id, session_id, user_id) = ToolboxService::extract_metadata(&request);
+        let (request_id, session_id) = ToolboxService::extract_metadata(&request);
 
         // Assert
         assert_eq!(request_id, "req-abc");
         assert_eq!(session_id, "sess-xyz");
-        assert_eq!(user_id, "user-123");
     }
 
     #[tokio::test]
