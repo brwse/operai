@@ -1,4 +1,28 @@
-//! MCP transport for the Operai runtime.
+//! Model Context Protocol (MCP) transport implementation.
+//!
+//! This module provides an MCP server implementation that exposes the Operai
+//! tool registry through the Model Context Protocol. It supports two modes:
+//!
+//! - **Standard mode**: Direct tool invocation using the MCP protocol
+//! - **Search mode**: Enhanced mode with semantic search capabilities and
+//!   paginated tool discovery
+//!
+//! # Search Mode
+//!
+//! When search mode is enabled, the server exposes three meta-tools:
+//! - `list_tool`: Paginated listing of all available tools
+//! - `find_tool`: Semantic search for tools using embedding-based similarity
+//! - `call_tool`: Invoke a tool by name with structured input
+//!
+//! # Architecture
+//!
+//! The [`McpService`] implements the [`rmcp::ServerHandler`] trait, bridging
+//! the MCP protocol with the local tool runtime. It handles:
+//!
+//! - Tool discovery and metadata conversion
+//! - Request routing between standard and search modes
+//! - Session extraction from HTTP headers for policy enforcement
+//! - Error translation between gRPC and MCP error formats
 
 use std::{borrow::Cow, sync::Arc};
 
@@ -31,16 +55,71 @@ const SEARCH_TOOL_LIST: &str = "list_tool";
 const SEARCH_TOOL_FIND: &str = "find_tool";
 const SEARCH_TOOL_CALL: &str = "call_tool";
 
-/// Async result for embedding a search query.
+/// Future type for embedding generation.
+///
+/// Used by [`SearchEmbedder`] to asynchronously generate query embeddings
+/// for semantic tool search.
 pub type SearchEmbedFuture<'a> = BoxFuture<'a, Result<Vec<f32>, String>>;
 
-/// Embeds a search query into a vector representation.
+/// Embedding generator for semantic tool search.
+///
+/// Implementors generate vector embeddings from text queries, enabling
+/// semantic similarity search across the tool registry. The embedding
+/// is compared against pre-computed tool embeddings to find relevant tools.
+///
+/// # Example
+///
+/// ```ignore
+/// struct MyEmbedder;
+///
+/// impl SearchEmbedder for MyEmbedder {
+///     fn embed_query(&self, query: &str) -> SearchEmbedFuture<'_> {
+///         Box::pin(async {
+///             // Generate embedding vector (e.g., using an ML model)
+///             Ok(vec![0.1, 0.2, 0.3, /* ... */])
+///         })
+///     }
+/// }
+/// ```
 pub trait SearchEmbedder: Send + Sync {
-    /// Convert a query string into an embedding vector.
+    /// Generate an embedding vector for the given query text.
+    ///
+    /// The returned vector should have the same dimensionality as the
+    /// tool embeddings used when indexing the tool registry.
     fn embed_query(&self, query: &str) -> SearchEmbedFuture<'_>;
 }
 
-/// MCP service backed by a local Operai runtime.
+/// MCP server service implementation.
+///
+/// Provides the Model Context Protocol server that exposes Operai tools to
+/// MCP clients. Supports both standard tool invocation and search mode for
+/// enhanced tool discovery.
+///
+/// # Configuration
+///
+/// Use the builder-style methods to configure the service:
+/// - [`searchable`]: Enable search mode with meta-tools
+/// - [`with_search_embedder`]: Set the embedder for semantic search
+/// - [`with_info`]: Set custom server info (name, version, capabilities)
+///
+/// # Example
+///
+/// ```ignore
+/// use operai_runtime::transports::mcp::McpService;
+/// use std::sync::Arc;
+///
+/// # let registry = Arc::new(operai_core::ToolRegistry::new());
+/// # let policy_store = Arc::new(operai_core::policy::session::PolicyStore::new(
+/// #     Arc::new(operai_core::policy::session::InMemoryPolicySessionStore::new())
+/// # ));
+/// // Create service with search mode enabled
+/// let service = McpService::new(registry, policy_store)
+///     .searchable(true)
+///     .with_search_embedder(Arc::new(my_embedder));
+///
+/// // Create HTTP transport
+/// let http_service = service.streamable_http_service();
+/// ```
 #[derive(Clone)]
 pub struct McpService {
     runtime: LocalRuntime,
@@ -50,19 +129,23 @@ pub struct McpService {
 }
 
 impl McpService {
-    /// Creates a new MCP service from a registry and policy store.
+    /// Create a new MCP service with default server info.
+    ///
+    /// Uses a default [`ServerInfo`] with tools capability enabled.
     #[must_use]
     pub fn new(registry: Arc<ToolRegistry>, policy_store: Arc<PolicyStore>) -> Self {
         Self::from_runtime(LocalRuntime::new(registry, policy_store))
     }
 
-    /// Creates a new MCP service from an existing local runtime.
+    /// Create a new MCP service from an existing runtime.
+    ///
+    /// Uses a default [`ServerInfo`] with tools capability enabled.
     #[must_use]
     pub fn from_runtime(runtime: LocalRuntime) -> Self {
         Self::with_info(runtime, default_server_info())
     }
 
-    /// Creates a new MCP service with a custom server info payload.
+    /// Create a new MCP service with custom server info.
     #[must_use]
     pub fn with_info(runtime: LocalRuntime, info: ServerInfo) -> Self {
         Self {
@@ -73,45 +156,58 @@ impl McpService {
         }
     }
 
-    /// Enables or disables searchable mode (list/find/call MCP tools only).
+    /// Enable or disable search mode.
+    ///
+    /// When enabled, the service exposes meta-tools (`list_tool`, `find_tool`,
+    /// `call_tool`) instead of directly exposing the tool registry.
     #[must_use]
     pub fn searchable(mut self, enabled: bool) -> Self {
         self.search_mode = enabled;
         self
     }
 
-    /// Sets the search embedder used by searchable mode.
+    /// Set the embedder for semantic search.
+    ///
+    /// Required when search mode is enabled and the `find_tool` meta-tool
+    /// will be used. The embedder generates vector embeddings from text queries
+    /// to find semantically similar tools.
     #[must_use]
     pub fn with_search_embedder(mut self, embedder: Arc<dyn SearchEmbedder>) -> Self {
         self.search_embedder = Some(embedder);
         self
     }
 
-    /// Returns true if searchable mode is enabled.
+    /// Returns whether search mode is enabled.
     #[must_use]
     pub fn is_searchable(&self) -> bool {
         self.search_mode
     }
 
-    /// Returns the underlying local runtime.
+    /// Returns a reference to the underlying runtime.
     #[must_use]
     pub fn runtime(&self) -> &LocalRuntime {
         &self.runtime
     }
 
-    /// Returns the MCP server info advertised during initialization.
+    /// Returns a reference to the server info.
     #[must_use]
     pub fn info(&self) -> &ServerInfo {
         &self.info
     }
 
-    /// Builds a streamable HTTP service using the default MCP server config.
+    /// Creates a streamable HTTP service with default configuration.
+    ///
+    /// Returns an Axum-compatible service that can be mounted in a router
+    /// to serve the MCP protocol over HTTP with streaming support.
     #[must_use]
     pub fn streamable_http_service(&self) -> StreamableHttpService<Self, LocalSessionManager> {
         self.streamable_http_service_with_config(StreamableHttpServerConfig::default())
     }
 
-    /// Builds a streamable HTTP service using a custom MCP server config.
+    /// Creates a streamable HTTP service with custom configuration.
+    ///
+    /// Returns an Axum-compatible service with custom server settings for
+    /// timeouts, limits, and other HTTP transport parameters.
     #[must_use]
     pub fn streamable_http_service_with_config(
         &self,
@@ -123,10 +219,15 @@ impl McpService {
 }
 
 impl ServerHandler for McpService {
+    /// Returns the server info provided during construction.
     fn get_info(&self) -> ServerInfo {
         self.info.clone()
     }
 
+    /// Lists available tools.
+    ///
+    /// In standard mode, returns all tools from the registry.
+    /// In search mode, returns the three meta-tools for search/list/call.
     fn list_tools(
         &self,
         _request: Option<PaginatedRequestParam>,
@@ -144,6 +245,12 @@ impl ServerHandler for McpService {
         }
     }
 
+    /// Calls a tool by name.
+    ///
+    /// In standard mode, directly invokes the specified tool from the registry.
+    /// In search mode, routes to the appropriate meta-tool handler.
+    ///
+    /// Tool names are normalized to include the "tools/" prefix if not already present.
     fn call_tool(
         &self,
         request: CallToolRequestParam,
@@ -195,6 +302,12 @@ impl ServerHandler for McpService {
     }
 }
 
+/// Handles tool invocations in search mode.
+///
+/// Routes calls to the appropriate meta-tool:
+/// - `list_tool`: Paginated tool listing
+/// - `find_tool`: Semantic search with embeddings
+/// - `call_tool`: Direct tool invocation
 async fn call_search_mode_tool(
     request: CallToolRequestParam,
     runtime: LocalRuntime,
@@ -282,6 +395,7 @@ async fn call_search_mode_tool(
     }
 }
 
+/// Creates the default server info with tools capability enabled.
 fn default_server_info() -> ServerInfo {
     ServerInfo {
         capabilities: ServerCapabilities::builder().enable_tools().build(),
@@ -289,6 +403,10 @@ fn default_server_info() -> ServerInfo {
     }
 }
 
+/// Ensures a tool name has the "tools/" prefix.
+///
+/// Runtime tools are identified with a "tools/" prefix (e.g., "tools/crate.tool").
+/// This function normalizes tool names by adding the prefix if not present.
 fn ensure_runtime_tool_name(name: &str) -> String {
     if name.starts_with("tools/") {
         name.to_string()
@@ -297,6 +415,10 @@ fn ensure_runtime_tool_name(name: &str) -> String {
     }
 }
 
+/// Converts internal tool info to MCP tool format.
+///
+/// Transforms [`ToolInfo`] from the tool registry into the MCP [`Tool`] format,
+/// converting schemas and handling optional fields.
 fn tool_info_to_mcp(info: &ToolInfo) -> Tool {
     Tool {
         name: Cow::Owned(info.qualified_id.clone()),
@@ -310,6 +432,7 @@ fn tool_info_to_mcp(info: &ToolInfo) -> Tool {
     }
 }
 
+/// Returns the three meta-tools for search mode.
 fn search_mode_tools() -> Vec<Tool> {
     vec![
         search_mode_list_tool(),
@@ -318,6 +441,7 @@ fn search_mode_tools() -> Vec<Tool> {
     ]
 }
 
+/// Creates the `list_tool` meta-tool for paginated tool listing.
 fn search_mode_list_tool() -> Tool {
     Tool {
         name: Cow::Borrowed(SEARCH_TOOL_LIST),
@@ -361,6 +485,7 @@ fn search_mode_list_tool() -> Tool {
     }
 }
 
+/// Creates the `find_tool` meta-tool for semantic search.
 fn search_mode_find_tool() -> Tool {
     Tool {
         name: Cow::Borrowed(SEARCH_TOOL_FIND),
@@ -420,6 +545,7 @@ fn search_mode_find_tool() -> Tool {
     }
 }
 
+/// Creates the `call_tool` meta-tool for direct tool invocation.
 fn search_mode_call_tool() -> Tool {
     Tool {
         name: Cow::Borrowed(SEARCH_TOOL_CALL),
@@ -464,6 +590,10 @@ fn search_mode_call_tool() -> Tool {
     }
 }
 
+/// Returns the JSON schema for a tool metadata object.
+///
+/// Defines the structure of tool information returned by search/list operations,
+/// including name, description, schemas, capabilities, and tags.
 fn search_tool_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
@@ -508,6 +638,7 @@ fn search_tool_schema() -> serde_json::Value {
     })
 }
 
+/// Returns `Some` trimmed string if non-empty, `None` otherwise.
 fn non_empty_string(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -517,6 +648,7 @@ fn non_empty_string(value: &str) -> Option<String> {
     }
 }
 
+/// Returns `Some` Cow-ified string if non-empty, `None` otherwise.
 fn non_empty_cow(value: &str) -> Option<Cow<'static, str>> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -526,6 +658,9 @@ fn non_empty_cow(value: &str) -> Option<Cow<'static, str>> {
     }
 }
 
+/// Parses a JSON schema string into a JsonObject.
+///
+/// Returns an empty object if the schema is invalid or not an object.
 fn schema_to_object(schema: &str) -> JsonObject {
     match serde_json::from_str::<serde_json::Value>(schema) {
         Ok(serde_json::Value::Object(map)) => map,
@@ -533,6 +668,7 @@ fn schema_to_object(schema: &str) -> JsonObject {
     }
 }
 
+/// Extracts a JsonObject from a JSON Value, returning empty object if not an object.
 fn schema_to_object_value(value: serde_json::Value) -> JsonObject {
     match value {
         serde_json::Value::Object(map) => map,
@@ -540,6 +676,9 @@ fn schema_to_object_value(value: serde_json::Value) -> JsonObject {
     }
 }
 
+/// Parses a JSON schema string into an optional Arc'd JsonObject.
+///
+/// Returns `None` if the schema is invalid or not an object.
 fn schema_to_object_option(schema: &str) -> Option<Arc<JsonObject>> {
     match serde_json::from_str::<serde_json::Value>(schema) {
         Ok(serde_json::Value::Object(map)) => Some(Arc::new(map)),
@@ -547,6 +686,7 @@ fn schema_to_object_option(schema: &str) -> Option<Arc<JsonObject>> {
     }
 }
 
+/// Converts a protobuf ListToolsResponse to JSON.
 fn list_tools_response_to_json(response: &crate::proto::ListToolsResponse) -> serde_json::Value {
     let tools = response
         .tools
@@ -559,6 +699,7 @@ fn list_tools_response_to_json(response: &crate::proto::ListToolsResponse) -> se
     })
 }
 
+/// Converts a protobuf SearchToolsResponse to JSON.
 fn search_tools_response_to_json(
     response: &crate::proto::SearchToolsResponse,
 ) -> serde_json::Value {
@@ -582,6 +723,7 @@ fn search_tools_response_to_json(
     })
 }
 
+/// Converts a protobuf CallToolResponse to JSON.
 fn call_tool_response_to_json(response: &crate::proto::CallToolResponse) -> serde_json::Value {
     match response.result.as_ref() {
         Some(call_tool_response::Result::Output(output)) => {
@@ -594,6 +736,7 @@ fn call_tool_response_to_json(response: &crate::proto::CallToolResponse) -> serd
     }
 }
 
+/// Converts a protobuf Tool to JSON.
 fn proto_tool_to_json(tool: &crate::proto::Tool) -> serde_json::Value {
     let input_schema = tool
         .input_schema
@@ -616,6 +759,13 @@ fn proto_tool_to_json(tool: &crate::proto::Tool) -> serde_json::Value {
     })
 }
 
+/// Converts a gRPC Status to an MCP ErrorData.
+///
+/// Maps gRPC status codes to appropriate MCP error types:
+/// - `NotFound` → `resource_not_found`
+/// - `InvalidArgument` → `invalid_params`
+/// - `PermissionDenied`/`Unauthenticated` → `invalid_request`
+/// - Others → `internal_error`
 fn status_to_error(status: &tonic::Status) -> ErrorData {
     let message = status.message().to_string();
     match status.code() {
@@ -626,6 +776,10 @@ fn status_to_error(status: &tonic::Status) -> ErrorData {
     }
 }
 
+/// Extracts the session ID from HTTP request extensions.
+///
+/// Looks for the `session-id` header in the request parts stored in
+/// the extensions. Used for policy enforcement and session tracking.
 fn extract_session_id_from_extensions(extensions: &Extensions) -> Option<String> {
     let parts = extensions.get::<http::request::Parts>()?;
     parts
@@ -635,12 +789,14 @@ fn extract_session_id_from_extensions(extensions: &Extensions) -> Option<String>
         .map(ToString::to_string)
 }
 
+/// Arguments for the `list_tool` meta-tool.
 #[derive(Debug, serde::Deserialize, Default)]
 struct ListArgs {
     page_size: Option<i32>,
     page_token: Option<String>,
 }
 
+/// Arguments for the `find_tool` meta-tool.
 #[derive(Debug, serde::Deserialize)]
 struct FindArgs {
     query: String,
@@ -648,18 +804,25 @@ struct FindArgs {
     page_token: Option<String>,
 }
 
+/// Arguments for the `call_tool` meta-tool.
 #[derive(Debug, serde::Deserialize)]
 struct CallArgs {
     name: String,
     input: Option<serde_json::Value>,
 }
 
+/// Parses tool arguments from an optional JsonObject.
+///
+/// Returns an error if the arguments cannot be deserialized into the target type.
 fn parse_args<T: DeserializeOwned>(args: Option<JsonObject>) -> Result<T, ErrorData> {
     let value = serde_json::Value::Object(args.unwrap_or_default());
     serde_json::from_value(value)
         .map_err(|e| ErrorData::invalid_params(format!("invalid arguments: {e}"), None))
 }
 
+/// Parses tool arguments from an optional JsonObject, using default if None.
+///
+/// Returns the default value if arguments are None, or deserializes them if present.
 fn parse_args_or_default<T: DeserializeOwned + Default>(
     args: Option<JsonObject>,
 ) -> Result<T, ErrorData> {

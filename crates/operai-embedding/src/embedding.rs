@@ -1,4 +1,40 @@
-//! Embedding generation using `FastEmbed` (local) or OpenAI-compatible APIs.
+//! Text embedding generation with support for multiple backends.
+//!
+//! This module provides a unified interface for generating text embeddings using
+//! different providers. It supports both local (FastEmbed) and remote (OpenAI) embedding
+//! generation, with automatic fallback and configuration management.
+//!
+//! # Key Components
+//!
+//! - [`Provider`]: Enum representing available embedding providers
+//! - [`EmbeddingGenerator`]: Main API for generating embeddings
+//! - [`write_embedding_file`]: Utility for persisting embeddings to disk
+//!
+//! # Configuration
+//!
+//! Embedding generation is configured via:
+//! - Global config: `~/.config/operai/config.toml`
+//! - Project config: `./operai.toml`
+//! - Environment variables (for OpenAI API key)
+//!
+//! # Example
+//!
+//! ```no_run
+//! use operai_embedding::EmbeddingGenerator;
+//! use std::path::Path;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! // Create generator from config
+//! let mut generator = EmbeddingGenerator::from_config(None, None)?;
+//!
+//! // Generate embedding for text
+//! let embedding = generator.embed("Hello, world!").await?;
+//!
+//! // Generate embedding for entire crate
+//! let crate_embedding = generator.embed_crate(Path::new("./my-crate")).await?;
+//! # Ok(())
+//! # }
+//! ```
 
 use std::{fmt::Write as _, path::Path};
 
@@ -14,12 +50,17 @@ use walkdir::WalkDir;
 
 use crate::config::{Config, ProjectConfig};
 
-/// Supported embedding providers.
+/// Embedding provider backend.
+///
+/// Represents the available embedding generation backends. Each provider
+/// has different capabilities, performance characteristics, and default models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
-    /// Local embeddings using `FastEmbed` with ONNX runtime.
+    /// Local embedding generation using FastEmbed.
+    /// Runs inference locally on CPU with quantized models.
     FastEmbed,
-    /// `OpenAI` API (or any OpenAI-compatible endpoint).
+    /// Remote embedding generation using OpenAI's API.
+    /// Requires API key and network connection.
     OpenAI,
 }
 
@@ -36,6 +77,12 @@ impl std::str::FromStr for Provider {
 }
 
 impl Provider {
+    /// Returns the default model name for this provider.
+    ///
+    /// # Defaults
+    ///
+    /// - `FastEmbed`: `nomic-embed-text-v1.5`
+    /// - `OpenAI`: `text-embedding-3-small`
     #[must_use]
     pub const fn default_model(self) -> &'static str {
         match self {
@@ -45,7 +92,6 @@ impl Provider {
     }
 }
 
-/// Resolves `FastEmbed` model name to enum variant.
 fn resolve_fastembed_model(model_name: &str) -> Result<EmbeddingModel> {
     match model_name.to_lowercase().as_str() {
         "nomic-embed-text-v1" | "nomic-embed-text-v1.0" => Ok(EmbeddingModel::NomicEmbedTextV1),
@@ -64,28 +110,75 @@ fn resolve_fastembed_model(model_name: &str) -> Result<EmbeddingModel> {
     }
 }
 
-/// Backend implementation for embedding generation.
+/// OpenAI backend for embedding generation.
+///
+/// Internal wrapper around the OpenAI client that stores the model name
+/// and handles API communication.
 struct OpenAIBackend {
     client: Client<OpenAIConfig>,
     model: String,
 }
 
+/// Internal enum representing the active embedding backend.
+///
+/// This allows [`EmbeddingGenerator`] to use different backends interchangeably
+/// while maintaining type safety and proper resource management.
 enum EmbeddingBackend {
     FastEmbed(Box<TextEmbedding>),
     OpenAI(Box<OpenAIBackend>),
 }
 
+/// Generator for text embeddings using configurable backends.
+///
+/// [`EmbeddingGenerator`] provides a unified interface for generating embeddings
+/// from either local (FastEmbed) or remote (OpenAI) providers. It supports
+/// embedding individual strings or entire Rust crates.
+///
+/// # Creation
+///
+/// Use [`EmbeddingGenerator::from_config`] to create a generator from configuration
+/// files, or use the provider-specific constructors:
+/// - [`EmbeddingGenerator::new_fastembed`]
+/// - [`EmbeddingGenerator::new_openai`]
+///
+/// # Example
+///
+/// ```no_run
+/// # use operai_embedding::EmbeddingGenerator;
+/// # async fn example() -> anyhow::Result<()> {
+/// let mut generator = EmbeddingGenerator::from_config(None, None)?;
+/// let embedding = generator.embed("example text").await?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct EmbeddingGenerator {
     provider: Provider,
     backend: EmbeddingBackend,
 }
 
 impl EmbeddingGenerator {
-    /// Creates a new FastEmbed-based generator.
+    /// Creates a new FastEmbed-based embedding generator.
+    ///
+    /// # Arguments
+    ///
+    /// * `model` - Optional model name. Defaults to `nomic-embed-text-v1.5`
+    /// * `show_download_progress` - Whether to display model download progress
+    ///
+    /// # Supported Models
+    ///
+    /// FastEmbed supports several local models:
+    /// - `nomic-embed-text-v1` / `nomic-embed-text-v1.0`
+    /// - `nomic-embed-text-v1.5` / `nomic-embed-text-v15`
+    /// - `nomic-embed-text-v1.5-q` / `nomic-embed-text-v15-q` (quantized)
+    /// - `all-minilm-l6-v2`
+    /// - `bge-small-en-v1.5`
+    /// - `bge-base-en-v1.5`
     ///
     /// # Errors
-    /// Returns an error if the model name is unknown or the model cannot be
-    /// initialized.
+    ///
+    /// Returns an error if:
+    /// - The model name is not recognized
+    /// - FastEmbed fails to initialize (e.g., download failure)
     pub fn new_fastembed(model: Option<String>, show_download_progress: bool) -> Result<Self> {
         let model_name = model.unwrap_or_else(|| Provider::FastEmbed.default_model().to_string());
         let embedding_model = resolve_fastembed_model(&model_name)?;
@@ -101,7 +194,19 @@ impl EmbeddingGenerator {
         })
     }
 
-    /// Creates a new OpenAI-compatible API-based generator.
+    /// Creates a new OpenAI-based embedding generator.
+    ///
+    /// # Arguments
+    ///
+    /// * `model` - Optional model name. Defaults to `text-embedding-3-small`
+    /// * `api_key` - Optional OpenAI API key. If `None`, reads from environment variable
+    /// * `base_url` - Optional custom API base URL (for compatible endpoints)
+    ///
+    /// # Notes
+    ///
+    /// This function does not validate the API key or network connectivity.
+    /// Errors occur during the first [`EmbeddingGenerator::embed`] call if
+    /// credentials are invalid or the service is unreachable.
     #[must_use]
     pub fn new_openai(
         model: Option<String>,
@@ -128,12 +233,28 @@ impl EmbeddingGenerator {
         }
     }
 
-    /// Resolves provider/model from CLI overrides, project config, then global
-    /// config.
+    /// Creates an embedding generator from configuration files.
+    ///
+    /// This method loads configuration from:
+    /// 1. Global config: `~/.config/operai/config.toml` (or `OPERAI_CONFIG_PATH`)
+    /// 2. Project config: `./operai.toml` (or `OPERAI_PROJECT_CONFIG_PATH`)
+    ///
+    /// Configuration precedence (highest to lowest):
+    /// - Function parameters (`override_provider`, `override_model`)
+    /// - Project config (`operai.toml`)
+    /// - Global config (`~/.config/operai/config.toml`)
+    /// - Provider defaults
+    ///
+    /// # Arguments
+    ///
+    /// * `override_provider` - Override the configured provider
+    /// * `override_model` - Override the configured model name
     ///
     /// # Errors
-    /// Returns an error if the provider is unknown or the backend cannot be
-    /// initialized.
+    ///
+    /// Returns an error if:
+    /// - The provider name is invalid
+    /// - The provider-specific initialization fails
     pub fn from_config(
         override_provider: Option<&str>,
         override_model: Option<&str>,
@@ -167,9 +288,25 @@ impl EmbeddingGenerator {
         }
     }
 
+    /// Generates an embedding vector for the given text.
+    ///
+    /// # Arguments
+    ///
+    /// * `text` - The input text to embed
+    ///
+    /// # Returns
+    ///
+    /// A vector of `f32` values representing the text embedding.
+    /// The vector length depends on the model:
+    /// - OpenAI `text-embedding-3-small`: 1536 dimensions
+    /// - Nomic models: 768 or 1024 dimensions
+    ///
     /// # Errors
-    /// Returns an error if embedding generation fails or the backend returns no
-    /// result.
+    ///
+    /// Returns an error if:
+    /// - The backend fails to generate the embedding
+    /// - The API request fails (OpenAI only)
+    /// - No embedding is returned by the backend
     pub async fn embed(&mut self, text: &str) -> Result<Vec<f32>> {
         info!(
             provider = ?self.provider,
@@ -215,11 +352,31 @@ impl EmbeddingGenerator {
         }
     }
 
-    /// Collects all `.rs` files and `Cargo.toml`, concatenates them, and
-    /// embeds.
+    /// Generates an embedding for an entire Rust crate.
+    ///
+    /// This method collects all `.rs` files from the crate's `src/` directory
+    /// and optionally the `Cargo.toml` file, concatenates them with file headers,
+    /// and generates a single embedding for the combined content.
+    ///
+    /// # Arguments
+    ///
+    /// * `crate_path` - Path to the crate root (containing `src/` and `Cargo.toml`)
+    ///
+    /// # Behavior
+    ///
+    /// - Collects all `.rs` files from `src/` recursively
+    /// - Prepends `// File: <path>` comments before each file
+    /// - Appends `Cargo.toml` contents if present
+    /// - Truncates to 30,000 characters if content is too large
+    /// - Uses the configured embedding backend to generate the vector
     ///
     /// # Errors
-    /// Returns an error if sources cannot be read or the embedding call fails.
+    ///
+    /// Returns an error if:
+    /// - The crate has no `src/` directory
+    /// - No `.rs` files are found in `src/`
+    /// - Any source file cannot be read
+    /// - The embedding generation fails
     pub async fn embed_crate(&mut self, crate_path: &Path) -> Result<Vec<f32>> {
         // text-embedding-3-small supports ~8191 tokens (~32k chars)
         // nomic-embed-text-v1.5 supports 8192 tokens
@@ -279,10 +436,29 @@ impl EmbeddingGenerator {
     }
 }
 
-/// Writes embedding as raw little-endian f32 bytes (no header).
+/// Writes an embedding vector to a binary file.
+///
+/// The embedding is written as raw little-endian `f32` values, suitable
+/// for later reading and processing.
+///
+/// # Arguments
+///
+/// * `path` - Destination file path
+/// * `embedding` - Slice of `f32` values to write
+///
+/// # File Format
+///
+/// Binary file containing concatenated little-endian 32-bit floats:
+/// ```text
+/// [f32 bytes 0][f32 bytes 1]...[f32 bytes N]
+/// ```
+/// Each `f32` is 4 bytes.
 ///
 /// # Errors
-/// Returns an error if the file cannot be written.
+///
+/// Returns an error if:
+/// - The parent directory does not exist
+/// - The file cannot be written (e.g., permission denied, path is a directory)
 pub fn write_embedding_file(path: &Path, embedding: &[f32]) -> Result<()> {
     let mut bytes = Vec::with_capacity(std::mem::size_of_val(embedding));
     for value in embedding {

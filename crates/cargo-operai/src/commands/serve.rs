@@ -1,4 +1,8 @@
-//! `cargo operai serve` command implementation.
+//! Local gRPC server for serving Operai toolbox tools.
+//!
+//! This module provides functionality to run a local gRPC server that exposes
+//! tools defined in an Operai manifest. The server supports gRPC reflection,
+//! health checks, and graceful shutdown.
 
 use std::{net::SocketAddr, path::PathBuf};
 
@@ -11,18 +15,21 @@ use tonic::transport::Server;
 use tonic_health::ServingStatus;
 use tracing::info;
 
-/// Arguments for the `serve` command.
+/// Command-line arguments for the serve command.
 #[derive(Args)]
 pub struct ServeArgs {
-    /// Path to tools.toml manifest file.
+    /// Path to the Operai manifest file (defaults to `operai.toml`).
     #[arg(short, long)]
     pub manifest: Option<PathBuf>,
-
-    /// Port to serve on.
+    /// Port to listen on (defaults to 50051).
     #[arg(short, long, default_value = "50051")]
     pub port: u16,
 }
 
+/// Runs the gRPC server, listening for Ctrl+C to trigger graceful shutdown.
+///
+/// This is the main entry point for the serve command. It initializes the runtime
+/// from the manifest and starts a gRPC server with health checks and reflection.
 pub async fn run(args: &ServeArgs) -> Result<()> {
     let shutdown = async {
         let _ = signal::ctrl_c().await;
@@ -31,6 +38,21 @@ pub async fn run(args: &ServeArgs) -> Result<()> {
     run_with_shutdown(args, shutdown).await
 }
 
+/// Runs the gRPC server with a custom shutdown trigger.
+///
+/// # Arguments
+///
+/// * `args` - Configuration for the server (manifest path and port)
+/// * `shutdown` - A future that completes when shutdown should occur
+///
+/// # Behavior
+///
+/// The server will:
+/// 1. Load tools from the manifest (or `operai.toml` if not specified)
+/// 2. Start a gRPC server on the specified port (default 50051)
+/// 3. Expose the toolbox service, health checks, and gRPC reflection
+/// 4. Wait for the shutdown future to complete
+/// 5. Drain in-flight requests before exiting
 async fn run_with_shutdown<F>(args: &ServeArgs, shutdown: F) -> Result<()>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
@@ -94,6 +116,14 @@ where
     Ok(())
 }
 
+/// Integration tests for the serve command.
+///
+/// These tests verify that:
+/// - Command-line arguments parse correctly
+/// - The server starts and accepts connections
+/// - Tools are loaded and accessible via gRPC
+///
+/// Tests use the `hello-world` example crate as a test fixture.
 #[cfg(test)]
 mod tests {
     use std::{
@@ -177,6 +207,9 @@ mod tests {
         )
     }
 
+    /// Searches for the hello-world cdylib in the target directory.
+    ///
+    /// Looks in both `{profile}/` and `{profile}/deps/` for the library.
     fn find_hello_world_cdylib(target_dir: &Path, profile: &str) -> Option<PathBuf> {
         let file_name = expected_hello_world_cdylib_file_name();
         let profile_dir = target_dir.join(profile);
@@ -199,6 +232,9 @@ mod tests {
         None
     }
 
+    /// Builds the hello-world crate as a cdylib.
+    ///
+    /// Builds in the specified profile and target directory. Panics if the build fails.
     fn build_hello_world_cdylib(target_dir: &Path, profile: &str) {
         let mut cmd = Command::new("cargo");
         cmd.current_dir(workspace_root());
@@ -212,6 +248,9 @@ mod tests {
         assert!(status.success(), "cargo build -p hello-world failed");
     }
 
+    /// Gets or builds the hello-world cdylib path.
+    ///
+    /// Uses a `OnceLock` to ensure the cdylib is only built once per test run.
     fn hello_world_cdylib_path() -> PathBuf {
         HELLO_WORLD_CDYLIB_PATH
             .get_or_init(|| {
@@ -229,6 +268,9 @@ mod tests {
             .clone()
     }
 
+    /// Generates a unique temp manifest path for each test.
+    ///
+    /// Uses a counter and process ID to ensure uniqueness across concurrent test runs.
     fn temp_manifest_path() -> PathBuf {
         let counter = TEMP_MANIFEST_COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
@@ -237,6 +279,9 @@ mod tests {
         ))
     }
 
+    /// Creates a temp manifest file that loads the given library.
+    ///
+    /// Handles Windows path escaping for TOML strings.
     fn write_manifest_for_library(path: &Path) -> PathBuf {
         let manifest_path = temp_manifest_path();
         let mut path_str = path.display().to_string();
@@ -248,6 +293,9 @@ mod tests {
         manifest_path
     }
 
+    /// Attempts to connect to the gRPC server with retry logic.
+    ///
+    /// Retries up to 30 times with 50ms delays between attempts.
     async fn connect_with_retry(
         endpoint: &str,
     ) -> operai_runtime::proto::toolbox_client::ToolboxClient<tonic::transport::Channel> {
@@ -268,6 +316,14 @@ mod tests {
         }
     }
 
+    /// Integration test that verifies the serve command runs correctly.
+    ///
+    /// This test:
+    /// 1. Builds a sample toolbox library
+    /// 2. Creates a manifest referencing it
+    /// 3. Starts the server on a random port
+    /// 4. Connects and verifies tools are accessible
+    /// 5. Shuts down the server cleanly
     #[tokio::test]
     async fn test_serve_runs_and_accepts_calls() -> Result<()> {
         let _lock = crate::testing::test_lock_async().await;

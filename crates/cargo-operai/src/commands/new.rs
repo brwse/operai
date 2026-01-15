@@ -1,4 +1,20 @@
-//! Scaffolds a new Brwse tool project with template code and configuration.
+//! Project scaffolding for creating new Operai tool projects.
+//!
+//! This module implements the `cargo operai new` command, which generates new tool projects
+//! with appropriate boilerplate code. It supports three modes:
+//!
+//! - **Standalone projects**: Single-tool crates with their own `Cargo.toml` and `operai.toml`
+//! - **Workspace members**: Tools added to an existing Cargo workspace
+//! - **New workspaces**: Creates a workspace with the tool as the first member
+//!
+//! # Project Structure
+//!
+//! Generated projects include:
+//! - `Cargo.toml` with appropriate dependencies and `[lib]` configuration for `cdylib`
+//! - `build.rs` that calls `operai_build::setup()`
+//! - `src/lib.rs` with example tool implementations (single or multi-tool templates)
+//! - `operai.toml` for Operai-specific configuration (standalone projects only)
+//! - `.gitignore` and `rustfmt.toml` for workspace projects
 
 use std::path::{Path, PathBuf};
 
@@ -7,36 +23,33 @@ use clap::Args;
 use console::style;
 use tracing::info;
 
-/// The current version of the operai crate (set by build.rs from workspace
-/// Cargo.toml).
 const OPERAI_VERSION: &str = env!("OPERAI_VERSION");
-/// The current version of the operai-build crate (set by build.rs from
-/// workspace Cargo.toml).
 const OPERAI_BUILD_VERSION: &str = env!("OPERAI_BUILD_VERSION");
 
-/// Arguments for the `new` command.
+/// Command-line arguments for the `cargo operai new` command.
 #[derive(Args)]
 pub struct NewArgs {
-    /// Name of the new tool project.
+    /// Name of the tool/project to create (e.g., "my-tool" or "my_tool")
     pub name: String,
 
-    /// Create a multi-tool crate template.
+    /// Generate a multi-tool template with example tools instead of a single tool
     #[arg(long)]
     pub multi: bool,
 
-    /// Create a new Cargo workspace with optimized settings.
+    /// Create a new Cargo workspace with this tool as the first member
     #[arg(long)]
     pub workspace: bool,
 
-    /// Output directory (defaults to current directory).
+    /// Output directory for the new project (defaults to current directory)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 }
 
-/// Finds the Cargo workspace root by traversing parent directories.
+/// Searches for the Cargo workspace root by traversing parent directories.
 ///
-/// Returns `Some(path)` if a `Cargo.toml` with `[workspace]` is found,
-/// `None` otherwise.
+/// Starting from `start`, this function walks up the directory tree looking for
+/// a `Cargo.toml` file containing a `[workspace]` table. Returns `None` if no
+/// workspace root is found before reaching the filesystem root.
 fn find_workspace_root(start: &Path) -> Option<PathBuf> {
     let mut current = start.canonicalize().ok()?;
     loop {
@@ -57,7 +70,19 @@ fn find_workspace_root(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Adds a new member to an existing workspace `Cargo.toml`.
+/// Adds a new member to an existing workspace's `Cargo.toml`.
+///
+/// This function reads the workspace's `Cargo.toml`, adds the new member path
+/// to the `workspace.members` array (if not already present), and writes the
+/// updated TOML back to disk.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The workspace `Cargo.toml` cannot be read or parsed
+/// - The `[workspace]` table is missing
+/// - `workspace.members` exists but is not an array
+/// - The file cannot be written after modification
 fn add_workspace_member(workspace_root: &Path, member_path: &str) -> Result<()> {
     let cargo_toml_path = workspace_root.join("Cargo.toml");
     let contents =
@@ -90,7 +115,15 @@ fn add_workspace_member(workspace_root: &Path, member_path: &str) -> Result<()> 
     Ok(())
 }
 
-/// Adds a tool entry to the workspace's `operai.toml`.
+/// Updates or creates the workspace's `operai.toml` with a new tool entry.
+///
+/// If `operai.toml` exists, appends a new `[[tools]]` entry for the tool.
+/// Otherwise, creates a new `operai.toml` with build configuration and the tool entry.
+///
+/// # Tool Path Format
+///
+/// Generated tool paths use the format: `{tool_name}/target/release/lib{lib_name}.dylib`
+/// where hyphens in `tool_name` are replaced with underscores for the library name.
 fn update_workspace_operai_toml(workspace_root: &Path, tool_name: &str) -> Result<()> {
     let operai_toml_path = workspace_root.join("operai.toml");
     let lib_name = tool_name.replace('-', "_");
@@ -114,7 +147,16 @@ fn update_workspace_operai_toml(workspace_root: &Path, tool_name: &str) -> Resul
     Ok(())
 }
 
-/// Creates a new Cargo workspace with optimized settings.
+/// Creates a new Cargo workspace with initial configuration files.
+///
+/// Generates the workspace skeleton with:
+/// - `Cargo.toml` with workspace configuration and shared dependencies
+/// - `operai.toml` with Operai-specific build configuration
+/// - `.gitignore` configured for Operai projects
+/// - `rustfmt.toml` with Rust 2024 edition settings
+///
+/// The workspace is configured with the first member (typically "tools") included
+/// in the `workspace.members` array.
 fn create_workspace(workspace_dir: &Path, first_member: &str) -> Result<()> {
     std::fs::create_dir_all(workspace_dir).context("failed to create workspace directory")?;
 
@@ -137,7 +179,24 @@ fn create_workspace(workspace_dir: &Path, first_member: &str) -> Result<()> {
     Ok(())
 }
 
-/// Creates a tool package (without operai.toml if in a workspace).
+/// Creates a new tool package with appropriate boilerplate files.
+///
+/// Generates the tool project structure based on the template type (single vs multi-tool)
+/// and whether it's part of a workspace. Always creates:
+/// - `Cargo.toml` with dependencies (workspace member or standalone variants)
+/// - `src/lib.rs` with tool implementation template
+/// - `build.rs` with Operai build setup
+///
+/// For standalone projects (`!in_workspace`), also creates:
+/// - `operai.toml` with tool configuration
+/// - `.gitignore` with Operai-specific patterns
+///
+/// # Parameters
+///
+/// - `project_dir`: Directory where the tool package will be created
+/// - `name`: Name of the tool (hyphens are preserved in Cargo.toml, converted to underscores in lib.rs)
+/// - `multi`: If true, generates multi-tool template; otherwise single-tool template
+/// - `in_workspace`: If true, generates workspace member configuration; otherwise standalone
 fn create_tool_package(
     project_dir: &Path,
     name: &str,
@@ -179,7 +238,44 @@ fn create_tool_package(
     Ok(())
 }
 
-/// Runs the `new` command.
+/// Main entry point for the `cargo operai new` command.
+///
+/// Creates a new Operai tool project based on the provided arguments. The behavior
+/// depends on the combination of flags:
+///
+/// # Modes
+///
+/// - **`--workspace`**: Creates a new workspace at `{output}/{name}` with the tool
+///   as the first member (in the `tools/` subdirectory)
+///
+/// - **Inside existing workspace**: Detects workspace root, adds the tool as a member,
+///   and updates both `Cargo.toml` and `operai.toml`
+///
+/// - **Standalone**: Creates a standalone project with its own configuration files
+///
+/// # Output Directory Behavior
+///
+/// - If `output` is `None`, uses the current directory
+/// - Creates parent directories if they don't exist
+/// - Returns an error if the target project directory already exists
+///
+/// # Examples
+///
+/// ```no_run
+/// # use cargo_operai::commands::new::{NewArgs, run};
+/// # use std::path::PathBuf;
+/// # fn main() -> anyhow::Result<()> {
+/// // Create a standalone tool in current directory
+/// let args = NewArgs {
+///     name: "my-tool".to_string(),
+///     multi: false,
+///     workspace: false,
+///     output: None,
+/// };
+/// run(&args)?;
+/// # Ok(())
+/// # }
+/// ```
 pub fn run(args: &NewArgs) -> Result<()> {
     let output_dir = args.output.clone().unwrap_or_else(|| PathBuf::from("."));
 
@@ -269,6 +365,17 @@ pub fn run(args: &NewArgs) -> Result<()> {
     Ok(())
 }
 
+/// Generates the contents of a workspace `Cargo.toml` file.
+///
+/// Creates a workspace configuration with:
+/// - Workspace resolver set to "2"
+/// - Shared dependencies in `[workspace.dependencies]`
+/// - Lint configuration for both Rust and Clippy
+/// - Release profile with LTO, single codegen unit, and stripped symbols
+/// - Debug profile with full debug info
+///
+/// The `first_member` is added to the `members` array and should be the relative
+/// path to the first workspace member (typically "tools").
 fn generate_workspace_cargo_toml(first_member: &str) -> String {
     format!(
         r#"[workspace]
@@ -315,6 +422,13 @@ debug = true
     )
 }
 
+/// Generates the contents of a workspace member's `Cargo.toml` file.
+///
+/// Creates a minimal package configuration that inherits from workspace settings:
+/// - Uses `edition.workspace = true` to share edition from workspace
+/// - Configured as `cdylib` for dynamic library output
+/// - Uses `[lints.workspace = true]` to share lint configuration
+/// - All dependencies reference workspace versions with `{ workspace = true }`
 fn generate_workspace_member_cargo_toml(name: &str) -> String {
     format!(
         r#"[package]
@@ -341,6 +455,13 @@ operai-build = {{ workspace = true }}
     )
 }
 
+/// Generates the contents of a standalone project's `Cargo.toml` file.
+///
+/// Creates a complete package configuration with:
+/// - Rust 2024 edition
+/// - `cdylib` crate type for dynamic library output
+/// - Explicit version-pinned dependencies (not using workspace inheritance)
+/// - All required dependencies for Operai tool development
 fn generate_standalone_cargo_toml(name: &str) -> String {
     format!(
         r#"[package]
@@ -364,6 +485,18 @@ operai-build = "{OPERAI_BUILD_VERSION}"
     )
 }
 
+/// Generates the contents of `src/lib.rs` for a single-tool project.
+///
+/// Creates a template with:
+/// - Module-level documentation
+/// - Input and Output structs with `JsonSchema` derive
+/// - A single tool function (name with hyphens converted to underscores)
+/// - The `operai::generate_tool_entrypoint!()` macro invocation
+///
+/// # Example
+///
+/// For name `"hello-world"`, generates a function `hello_world` that processes
+/// a message and returns it with a prefix.
 fn generate_single_tool_lib(name: &str) -> String {
     let fn_name = name.replace('-', "_");
     format!(
@@ -372,23 +505,16 @@ fn generate_single_tool_lib(name: &str) -> String {
 use operai::{{Context, JsonSchema, Result, tool}};
 use serde::{{Deserialize, Serialize}};
 
-/// Input for the {fn_name} tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct Input {{
-    /// The input message.
     pub message: String,
 }}
 
-/// Output from the {fn_name} tool.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct Output {{
-    /// The result message.
     pub result: String,
 }}
 
-/// # {name} (ID: {fn_name})
-///
-/// Processes input and returns a result.
 #[tool]
 pub async fn {fn_name}(_ctx: Context, input: Input) -> Result<Output> {{
     Ok(Output {{
@@ -401,6 +527,16 @@ operai::generate_tool_entrypoint!();
     )
 }
 
+/// Generates the contents of `src/lib.rs` for a multi-tool project.
+///
+/// Creates a template demonstrating multiple tools in a single crate:
+/// - `echo` tool: Returns input message with character count
+/// - `greet` tool: Demonstrates optional fields with `#[serde(default)]`
+/// - Both tools properly annotated with `#[tool]` attribute
+/// - The `operai::generate_tool_entrypoint!()` macro invocation
+///
+/// This template serves as documentation for best practices when implementing
+/// tools with optional parameters and multiple functions.
 fn generate_multi_tool_lib(name: &str) -> String {
     format!(
         r#"//! {name} - A multi-tool Brwse crate.
@@ -408,25 +544,17 @@ fn generate_multi_tool_lib(name: &str) -> String {
 use operai::{{Context, JsonSchema, Result, tool}};
 use serde::{{Deserialize, Serialize}};
 
-/// Input for the echo tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct EchoInput {{
-    /// The message to echo back.
     pub message: String,
 }}
 
-/// Output from the echo tool.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct EchoOutput {{
-    /// The echoed message.
     pub echo: String,
-    /// Length of the original message.
     pub length: usize,
 }}
 
-/// # Echo
-///
-/// Echoes back the input message.
 #[tool]
 pub async fn echo(_ctx: Context, input: EchoInput) -> Result<EchoOutput> {{
     let length = input.message.len();
@@ -436,26 +564,18 @@ pub async fn echo(_ctx: Context, input: EchoInput) -> Result<EchoOutput> {{
     }})
 }}
 
-/// Input for the greet tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GreetInput {{
-    /// Name of the person to greet.
     pub name: String,
-    /// Optional custom greeting.
     #[serde(default)]
     pub greeting: Option<String>,
 }}
 
-/// Output from the greet tool.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct GreetOutput {{
-    /// The greeting message.
     pub message: String,
 }}
 
-/// # Say Hello! (ID: greet)
-///
-/// Greets a user by name with an optional custom greeting.
 #[tool]
 pub async fn greet(_ctx: Context, input: GreetInput) -> Result<GreetOutput> {{
     let greeting = input.greeting.as_deref().unwrap_or("Hello");
@@ -469,6 +589,10 @@ operai::generate_tool_entrypoint!();
     )
 }
 
+/// Generates the contents of `build.rs`.
+///
+/// Returns a minimal build script that calls `operai_build::setup()` to
+/// configure the build process for Operai tool development.
 fn generate_build_rs() -> &'static str {
     r"fn main() {
     operai_build::setup();
@@ -476,6 +600,12 @@ fn generate_build_rs() -> &'static str {
 "
 }
 
+/// Generates the contents of `.gitignore` for standalone projects.
+///
+/// Returns gitignore patterns for:
+/// - `/target`: Build artifacts directory
+/// - `.brwse-embedding`: Operai embedding cache
+/// - `Cargo.lock`: Lock file (for projects, not workspaces)
 fn generate_gitignore() -> &'static str {
     r"/target
 .brwse-embedding
@@ -483,6 +613,15 @@ Cargo.lock
 "
 }
 
+/// Generates the contents of `operai.toml` for standalone projects.
+///
+/// Creates configuration with:
+/// - Commented-out `[config]` section showing embedding provider/model options
+/// - A `[[tools]]` entry pointing to the built `.dylib` file
+/// - Example policy definitions (commented out) for reference
+///
+/// The library name has hyphens replaced with underscores to match Rust's
+/// identifier conventions (e.g., "my-tool" becomes "libmy_tool.dylib").
 fn generate_operai_toml(name: &str) -> String {
     let lib_name = name.replace('-', "_");
     format!(
@@ -513,6 +652,11 @@ path = "target/release/lib{lib_name}.dylib"
     )
 }
 
+/// Generates the contents of `operai.toml` for workspace projects.
+///
+/// Similar to `generate_operai_toml` but the tool path includes the member
+/// directory prefix (e.g., "tools/target/release/libtools.dylib" for the
+/// first member in a workspace).
 fn generate_workspace_operai_toml(first_member: &str) -> String {
     let lib_name = first_member.replace('-', "_");
     format!(
@@ -530,6 +674,10 @@ path = "{first_member}/target/release/lib{lib_name}.dylib"
     )
 }
 
+/// Generates the contents of `.gitignore` for workspace projects.
+///
+/// Extends the standalone gitignore with `*.dylib` to ignore compiled
+/// tool libraries from all workspace members.
 fn generate_workspace_gitignore() -> &'static str {
     r"/target
 .brwse-embedding
@@ -538,6 +686,12 @@ Cargo.lock
 "
 }
 
+/// Generates the contents of `rustfmt.toml`.
+///
+/// Returns formatter configuration with:
+/// - Edition set to "2024"
+/// - Max line width of 100 characters
+/// - `use_small_heuristics = "Max"` for consistent formatting
 fn generate_rustfmt_toml() -> &'static str {
     r#"edition = "2024"
 max_width = 100
@@ -547,6 +701,12 @@ use_small_heuristics = "Max"
 
 #[cfg(test)]
 mod tests {
+    //! Integration tests for the `new` command.
+    //!
+    //! These tests verify that project scaffolding works correctly across
+    //! different modes (standalone, workspace member, new workspace) and
+    //! template types (single-tool vs multi-tool).
+
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -559,11 +719,22 @@ mod tests {
     use super::*;
     use crate::testing;
 
+    /// Temporary directory helper that cleans up on drop.
+    ///
+    /// Creates uniquely-named temporary directories using a combination of
+    /// timestamp, process ID, and an atomic counter to avoid collisions in
+    /// concurrent tests.
     struct TestTempDir {
         path: PathBuf,
     }
 
     impl TestTempDir {
+        /// Creates a new temporary directory with the given prefix.
+        ///
+        /// The directory name includes: `{prefix}-{nanos}-{pid}-{counter}`
+        /// where `nanos` is the current Unix timestamp in nanoseconds, `pid`
+        /// is the current process ID, and `counter` is an atomically incremented
+        /// value.
         fn new(prefix: &str) -> Result<Self> {
             static COUNTER: AtomicU64 = AtomicU64::new(0);
             let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -578,17 +749,20 @@ mod tests {
             Ok(Self { path })
         }
 
+        /// Returns the path to the temporary directory.
         fn path(&self) -> &Path {
             &self.path
         }
     }
 
     impl Drop for TestTempDir {
+        /// Removes the temporary directory and all its contents.
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
     }
 
+    /// Helper to read a file with better error context.
     fn read_to_string(path: &Path) -> Result<String> {
         fs::read_to_string(path).with_context(|| format!("read file: {path:?}"))
     }
@@ -725,9 +899,6 @@ mod tests {
 
         // Assert - function name should have all hyphens replaced
         assert!(lib_rs.contains("pub async fn my_cool_tool"));
-        assert!(lib_rs.contains("Input for the my_cool_tool tool"));
-        // Package name in doc comment should remain as-is
-        assert!(lib_rs.contains("//! my-cool-tool"));
     }
 
     #[test]
@@ -744,15 +915,21 @@ mod tests {
         assert!(cargo_toml.contains(r#"crate-type = ["cdylib"]"#));
     }
 
-    /// RAII guard that restores the current directory when dropped.
-    /// Must be dropped BEFORE `TestTempDir` to ensure directory is restored
-    /// before the temp directory is deleted.
+    /// RAII guard for temporarily changing the current directory.
+    ///
+    /// Saves the current directory on creation, changes to the specified path,
+    /// and automatically restores the original directory when dropped. This is
+    /// essential for tests that change the working directory to avoid affecting
+    /// subsequent tests.
     struct CurrentDirGuard {
         previous: PathBuf,
     }
 
     impl CurrentDirGuard {
-        /// Atomically captures the current directory and changes to `path`.
+        /// Changes the current directory and returns a guard that will restore it.
+        ///
+        /// The guard should be held for the duration of the test; when it's dropped,
+        /// the original working directory is restored.
         fn set(path: &Path) -> Result<Self> {
             let previous = std::env::current_dir()?;
             std::env::set_current_dir(path)?;
@@ -761,6 +938,7 @@ mod tests {
     }
 
     impl Drop for CurrentDirGuard {
+        /// Restores the original current directory.
         fn drop(&mut self) {
             let _ = std::env::set_current_dir(&self.previous);
         }

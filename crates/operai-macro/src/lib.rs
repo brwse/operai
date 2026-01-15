@@ -1,11 +1,73 @@
-//! Procedural macros for the Operai Tool SDK.
+// Copyright Operai LLC
+
+//! # Operai Procedural Macros
 //!
-//! This crate provides:
-//! - `#[tool]` attribute macro for defining tools
-//! - `#[init]` attribute macro for initialization functions
-//! - `#[shutdown]` attribute macro for shutdown functions
-//! - `define_system_credential!` macro for system-level credentials
-//! - `define_user_credential!` macro for user-provided credentials
+//! This crate provides procedural macros for defining Operai tools and credentials.
+//! It handles code generation for tool registration, lifecycle hooks, and credential management.
+//!
+//! ## Main Macros
+//!
+//! - `#[tool]` - Attribute macro for defining tool handlers
+//! - `#[init]` - Attribute macro for initialization functions
+//! - `#[shutdown]` - Attribute macro for shutdown/cleanup functions
+//! - `define_system_credential!` - Macro for defining system-level credentials
+//! - `define_user_credential!` - Macro for defining user-level credentials
+//!
+//! ## Tool Definition
+//!
+//! Tools are defined using the `#[tool]` attribute with doc comments providing metadata:
+//!
+//! ```ignore
+//! /// # Greet User
+//! ///
+//! /// Greets a user by name with a friendly message.
+//! ///
+//! /// ## Capabilities
+//! /// - read
+//! ///
+//! /// ## Tags
+//! /// - utility
+//! /// - greeting
+//! #[tool]
+//! async fn greet(ctx: Context, input: GreetInput) -> Result<GreetOutput, Error> {
+//!     // ...
+//! }
+//! ```
+//!
+//! The macro generates:
+//! - A wrapper function for JSON serialization/deserialization
+//! - Schema generation for input/output types
+//! - Registration with the global tool inventory
+//!
+//! ## Lifecycle Hooks
+//!
+//! Init and shutdown functions can be defined to handle setup and cleanup:
+//!
+//! ```ignore
+//! #[init]
+//! async fn setup() -> Result<(), Error> {
+//!     // Initialize resources
+//! }
+//!
+//! #[shutdown]
+//! fn cleanup() {
+//!     // Release resources
+//! }
+//! ```
+//!
+//! ## Credential Definitions
+//!
+//! Credentials are defined using the credential macros:
+//!
+//! ```ignore
+//! define_system_credential!(ApiKey("api_key") {
+//!     /// API key for authentication
+//!     key: String,
+//!     #[optional]
+//!     /// Optional endpoint override
+//!     endpoint: Option<String>,
+//! });
+//! ```
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
@@ -14,55 +76,31 @@ use syn::{
     spanned::Spanned,
 };
 
-/// Attribute macro for defining a tool handler.
+/// Metadata extracted from a function's doc comments.
 ///
-/// # Syntax
-///
-/// This macro uses Rust doc comments for tool metadata.
-///
-/// - **H1 Heading**: The first H1 heading (`# Title`) is used as the tool name.
-/// - **Tool ID**: Optionally specified in the H1 heading as `(ID: my_id)`. If
-///   omitted, defaults to the function name.
-/// - **Description**: The text following the H1 heading is used as the tool
-///   description.
-/// - **Capabilities**: Defined under a `## Capabilities` section as a list.
-/// - **Tags**: Defined under a `## Tags` section as a list.
-///
-/// Parsing stops at the next H1 heading (e.g., `# Errors`).
-///
-/// # Example
-///
-/// ```ignore
-/// use operai::{tool, Context, JsonSchema, Result};
-/// use serde::{Deserialize, Serialize};
-///
-/// #[derive(Deserialize, JsonSchema)]
-/// struct Input { name: String }
-///
-/// #[derive(Serialize, JsonSchema)]
-/// struct Output { message: String }
-///
-/// /// # Greet User
-/// ///
-/// /// Greets a user.
-/// ///
-/// /// ## Capabilities
-/// /// - read
-/// #[tool]
-/// async fn greet(ctx: Context, input: Input) -> Result<Output> {
-///     Ok(Output { message: format!("Hello, {}!", input.name) })
-/// }
-/// ```
-/// Parsed metadata from doc comments.
+/// Used by the `#[tool]` macro to populate tool metadata from structured documentation.
 struct DocCommentMetadata {
+    /// Tool description (extracted from content after H1 heading)
     description: Option<String>,
+    /// Custom tool ID (from H1 heading suffix: `(ID: custom_id)`)
     id: Option<String>,
+    /// Display name (from H1 heading)
     name: Option<String>,
+    /// List of capabilities (from ## Capabilities section)
     capabilities: Vec<String>,
+    /// List of tags (from ## Tags section)
     tags: Vec<String>,
 }
 
-/// Extracts metadata from structured doc comments.
+/// Extracts tool metadata from a function's doc comments.
+///
+/// Parses structured doc comments following this format:
+/// - `# Tool Name (ID: custom_id)` - H1 heading with optional ID override
+/// - Description text following H1
+/// - `## Capabilities` section with list items
+/// - `## Tags` section with list items
+///
+/// Returns `None` if no doc comments are present.
 fn extract_doc_metadata(attrs: &[Attribute]) -> Option<DocCommentMetadata> {
     let doc_lines: Vec<String> = attrs
         .iter()
@@ -167,6 +205,26 @@ fn extract_doc_metadata(attrs: &[Attribute]) -> Option<DocCommentMetadata> {
     Some(metadata)
 }
 
+/// Attribute macro for defining tool handler functions.
+///
+/// This macro generates the necessary boilerplate for tool registration and invocation.
+/// The annotated function must:
+/// - Be `async`
+/// - Take exactly 2 parameters: `(ctx: Context, input: Input)`
+/// - Return `Result<Output, Error>`
+///
+/// Tool metadata is extracted from structured doc comments:
+/// - `# Tool Name (ID: custom_id)` - H1 heading with optional ID override
+/// - Description text after H1
+/// - `## Capabilities` section with `-` list items
+/// - `## Tags` section with `-` list items
+///
+/// # Errors
+///
+/// Returns a compile error if:
+/// - Attributes are provided (use doc comments instead)
+/// - Doc comments are missing or malformed
+/// - Function signature requirements aren't met
 #[proc_macro_attribute]
 pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Reject any attributes - doc comments only
@@ -189,6 +247,21 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
+/// Expands a `#[tool]` attribute into generated code.
+///
+/// This function performs validation and code generation for tool functions:
+/// 1. Extracts and validates metadata from doc comments
+/// 2. Validates function signature (async, 2 args, Result return)
+/// 3. Generates a wrapper function for JSON serialization
+/// 4. Submits the tool to the global inventory
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Doc metadata is missing required fields
+/// - Function is not async
+/// - Function doesn't have exactly 2 parameters
+/// - Return type is not `Result<T, E>`
 fn expand_tool(func: &ItemFn) -> Result<proc_macro2::TokenStream> {
     let func_name = &func.sig.ident;
 
@@ -306,22 +379,14 @@ fn expand_tool(func: &ItemFn) -> Result<proc_macro2::TokenStream> {
     Ok(expanded)
 }
 
-/// Attribute macro for defining an initialization function.
+/// Attribute macro for defining initialization functions.
 ///
-/// The init function is called once when the tool library is loaded.
-/// It must be an async function with no parameters that returns `Result<()>`.
+/// Annotates an async function that runs once when the tool library is loaded.
+/// The function must:
+/// - Be `async`
+/// - Take no parameters
 ///
-/// # Example
-///
-/// ```ignore
-/// use operai::{init, Result};
-///
-/// #[init]
-/// async fn setup() -> Result<()> {
-///     // Initialize connections, load config, etc.
-///     Ok(())
-/// }
-/// ```
+/// The macro generates a wrapper function and submits it to the init inventory.
 #[proc_macro_attribute]
 pub fn init(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let func = parse_macro_input!(item as ItemFn);
@@ -332,6 +397,16 @@ pub fn init(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
+/// Expands a `#[init]` attribute into generated code.
+///
+/// Validates that the function is async and takes no parameters,
+/// then generates a wrapper and submits it to the init inventory.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Function is not async
+/// - Function takes parameters
 fn expand_init(func: &ItemFn) -> Result<proc_macro2::TokenStream> {
     let func_name = &func.sig.ident;
     let func_name_str = func_name.to_string();
@@ -373,21 +448,14 @@ fn expand_init(func: &ItemFn) -> Result<proc_macro2::TokenStream> {
     Ok(expanded)
 }
 
-/// Attribute macro for defining a shutdown function.
+/// Attribute macro for defining shutdown/cleanup functions.
 ///
-/// The shutdown function is called once when the tool library is unloaded.
-/// It must be a synchronous function with no parameters and no return value.
+/// Annotates a synchronous function that runs when the tool library is unloaded.
+/// The function must:
+/// - Be synchronous (not `async`)
+/// - Take no parameters
 ///
-/// # Example
-///
-/// ```ignore
-/// use operai::shutdown;
-///
-/// #[shutdown]
-/// fn cleanup() {
-///     // Close connections, flush buffers, etc.
-/// }
-/// ```
+/// The macro submits the function to the shutdown inventory.
 #[proc_macro_attribute]
 pub fn shutdown(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let func = parse_macro_input!(item as ItemFn);
@@ -398,6 +466,16 @@ pub fn shutdown(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
+/// Expands a `#[shutdown]` attribute into generated code.
+///
+/// Validates that the function is synchronous and takes no parameters,
+/// then submits it to the shutdown inventory.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Function is async
+/// - Function takes parameters
 fn expand_shutdown(func: &ItemFn) -> Result<proc_macro2::TokenStream> {
     let func_name = &func.sig.ident;
     let func_name_str = func_name.to_string();
@@ -432,7 +510,16 @@ fn expand_shutdown(func: &ItemFn) -> Result<proc_macro2::TokenStream> {
     Ok(expanded)
 }
 
-/// Extract the Ok type from `Result<T, E>`.
+/// Extracts the `T` from a `Result<T, E>` type.
+///
+/// Used to determine the output type of tool functions from their return type.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Type is not a `Result`
+/// - `Result` has no type arguments
+/// - First type argument is not a type
 fn extract_result_ok_type(ty: &Type) -> Result<&Type> {
     match ty {
         Type::Path(type_path) => {
@@ -468,65 +555,65 @@ fn extract_result_ok_type(ty: &Type) -> Result<&Type> {
     }
 }
 
-/// Macro for defining system credentials.
+/// Defines a system-level credential type.
 ///
-/// System credentials are loaded from the manifest configuration at startup and
-/// shared across all invocations. Use this for credentials that apply to all
-/// users (e.g., API keys for external services).
-///
-/// # Example
-///
+/// Syntax:
 /// ```ignore
-/// define_system_credential! {
-///     ApiCredential("api") {
-///         api_key: String,
-///         #[optional]
-///         endpoint: Option<String>,
-///     }
-/// }
+/// define_system_credential!(StructName("credential_name") {
+///     /// Field description
+///     field_name: Type,
+///     #[optional]
+///     /// Optional field description
+///     optional_field: Option<Type>,
+/// });
 /// ```
+///
+/// This macro generates:
+/// - A struct with the provided fields
+/// - A `get(ctx: &Context)` method for retrieving the credential
+/// - Registration with the credential inventory
 #[proc_macro]
 pub fn define_system_credential(input: TokenStream) -> TokenStream {
     let cred = parse_macro_input!(input as CredentialDef);
     expand_credential(&cred, CredentialKind::System).into()
 }
 
-/// Macro for defining user credentials.
+/// Defines a user-level credential type.
 ///
-/// User credentials are passed per-invocation via gRPC and associated with
-/// a specific user via OIDC. Use this for credentials that are user-specific.
-///
-/// # Example
-///
-/// ```ignore
-/// define_user_credential! {
-///     UserApiKey("user_api") {
-///         token: String,
-///     }
-/// }
-/// ```
+/// Syntax is identical to `define_system_credential!`, but the credential
+/// is retrieved from the user credential store instead of the system store.
 #[proc_macro]
 pub fn define_user_credential(input: TokenStream) -> TokenStream {
     let cred = parse_macro_input!(input as CredentialDef);
     expand_credential(&cred, CredentialKind::User).into()
 }
 
+/// Indicates whether a credential is system or user-scoped.
 #[derive(Clone, Copy)]
 enum CredentialKind {
     System,
     User,
 }
 
+/// Parsed credential definition from the macro input.
 struct CredentialDef {
+    /// Name of the generated struct
     struct_name: Ident,
+    /// Credential identifier (used for lookup via Context)
     cred_name: String,
+    /// Fields in the credential struct
     fields: Vec<CredentialField>,
 }
 
+/// A single field in a credential definition.
 struct CredentialField {
+    /// Field name
     name: Ident,
+    /// Field type
     ty: Type,
+    /// Whether the field is marked with `#[optional]`
     optional: bool,
+    /// Description from doc comments
     description: Option<String>,
 }
 
@@ -584,6 +671,13 @@ impl syn::parse::Parse for CredentialDef {
     }
 }
 
+/// Expands a credential definition into generated code.
+///
+/// Generates:
+/// - A struct with the provided fields
+/// - An impl with a `get(ctx: &Context)` method
+/// - Schema functions for validation
+/// - Inventory submission for registration
 fn expand_credential(def: &CredentialDef, kind: CredentialKind) -> proc_macro2::TokenStream {
     let struct_name = &def.struct_name;
     let cred_name = &def.cred_name;
@@ -624,11 +718,6 @@ fn expand_credential(def: &CredentialDef, kind: CredentialKind) -> proc_macro2::
         }
 
         impl #struct_name {
-            /// Retrieves this credential from the context.
-            ///
-            /// # Errors
-            ///
-            /// Returns an error if the credential is not found or cannot be deserialized.
             pub fn get(ctx: &::operai::Context) -> ::std::result::Result<Self, ::operai::CredentialError> {
                 ctx.#getter_fn(#cred_name)
             }
@@ -652,14 +741,17 @@ mod tests {
 
     use super::*;
 
+    /// Removes all whitespace for easier content comparison in tests.
     fn strip_whitespace(input: &str) -> String {
         input.chars().filter(|c| !c.is_whitespace()).collect()
     }
 
+    /// Helper to parse a function from tokens for testing.
     fn parse_item_fn(tokens: proc_macro2::TokenStream) -> ItemFn {
         syn::parse2(tokens).expect("failed to parse ItemFn")
     }
 
+    /// Helper to parse a credential definition from tokens for testing.
     fn parse_credential_def(tokens: proc_macro2::TokenStream) -> CredentialDef {
         syn::parse2(tokens).expect("failed to parse CredentialDef")
     }

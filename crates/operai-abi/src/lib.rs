@@ -1,31 +1,57 @@
-//! Stable ABI types for Operai Tool runtime.
+//! # Operai Tool ABI
 //!
-//! This crate defines the FFI boundary between the Operai Toolbox runtime and
-//! dynamically loaded tool libraries (cdylib). All types use `abi_stable` for
-//! guaranteed ABI stability across Rust compiler versions.
+//! This crate defines the stable Application Binary Interface (ABI) for Operai tools.
+//! It enables dynamic loading and invocation of tool libraries across different versions
+//! of the Operai runtime.
 //!
-//! # Ownership Philosophy
+//! ## Architecture
 //!
-//! Types in this crate follow the principle: **borrow as much as possible until
-//! cloning is needed** (e.g., for async futures).
+//! The ABI uses [`abi_stable`] to provide cross-version compatibility, allowing tools
+//! compiled against one version of the ABI to work with runtimes built against another
+//! version (within the same ABI major version).
 //!
-//! - **`'static` lifetime types** ([`ToolDescriptor`], [`ToolMeta`]): Borrow
-//!   from the loaded library. The data lives as long as the library is loaded.
+//! ## Tool Lifecycle
 //!
-//! - **Per-call types with `'a` lifetime** ([`CallContext`], [`CallArgs`]):
-//!   Borrow from the caller's stack. Valid only for the duration of the
-//!   synchronous FFI call.
+//! Every tool library must implement the [`ToolModule`] interface, which defines three
+//! lifecycle operations:
 //!
-//! - **Async return types** ([`FfiFuture`]): FFI-safe futures returned from
-//!   tool operations. The caller awaits these to get the result.
+//! 1. **Initialization**: `init()` is called once when the library is loaded
+//! 2. **Invocation**: `call()` is called for each tool execution request
+//! 3. **Shutdown**: `shutdown()` is called when the library is unloaded
 //!
-//! - **SDK types** (`Context` in operai): Owned for user ergonomics. The SDK
-//!   clones data from the FFI types when crossing the async boundary.
+//! ## Thread Safety
 //!
-//! # Safety
+//! - The runtime guarantees that `init()` and `shutdown()` are called from a single thread
+//! - Multiple `call()` invocations may occur concurrently on different threads
+//! - Tool implementations must ensure their `call()` function is thread-safe
 //!
-//! This crate uses `abi_stable` to provide safe FFI types. Tool authors should
-//! use the `operai` SDK which provides additional abstractions.
+//! ## ABI Versioning
+//!
+//! The current ABI version is defined by [`TOOL_ABI_VERSION`). All tool libraries
+//! must export a [`ToolMeta`] struct with the matching `abi_version` to be loaded.
+//!
+//! ## Example
+//!
+//! ```no_run
+//! # #![allow(dead_code)]
+//! use operai_abi::*;
+//! use abi_stable::std_types::RVec;
+//! use async_ffi::FfiFuture;
+//!
+//! pub extern "C" fn init(args: InitArgs) -> FfiFuture<ToolResult> {
+//!     // Initialize tool resources
+//!     FfiFuture::new(async { ToolResult::Ok })
+//! }
+//!
+//! pub extern "C" fn call(args: CallArgs<'_>) -> FfiFuture<CallResult> {
+//!     // Handle tool invocation
+//!     FfiFuture::new(async { CallResult::ok(RVec::from_slice(b"result")) })
+//! }
+//!
+//! pub extern "C" fn shutdown() {
+//!     // Cleanup resources
+//! }
+//! ```
 
 pub use abi_stable;
 use abi_stable::{
@@ -38,44 +64,62 @@ use abi_stable::{
 pub use async_ffi;
 use async_ffi::FfiFuture;
 
-/// Current ABI version. Incremented when breaking changes are made.
-/// The runtime checks this to ensure compatibility with loaded tools.
+/// Current ABI version for Operai tools.
+///
+/// Tool libraries must export a [`ToolMeta`] struct with this `abi_version`
+/// to be compatible with the current runtime. Mismatches will result in
+/// load failures with [`ToolResult::AbiMismatch`].
 pub const TOOL_ABI_VERSION: u32 = 1;
 
 /// Result codes for tool operations.
+///
+/// These codes are used across the ABI to indicate success or failure of
+/// initialization, calls, and other operations. The enum is marked as `#[non_exhaustive]`
+/// to allow adding new error codes in future ABI versions without breaking compatibility.
+///
+/// # Representation
+///
+/// The enum uses `#[repr(u8)]` for a stable wire format, ensuring it can be safely
+/// passed across FFI boundaries. Each variant has an explicit discriminant to maintain
+/// binary compatibility across ABI versions.
 #[repr(u8)]
 #[derive(StableAbi, Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ToolResult {
     /// Operation completed successfully.
     Ok = 0,
-    /// Generic error occurred.
+    /// General error (use specific error codes when available).
     Error = 1,
-    /// Tool with the specified ID was not found.
+    /// Tool or resource not found.
     NotFound = 2,
-    /// Invalid input was provided.
+    /// Input validation failed.
     InvalidInput = 3,
-    /// ABI version mismatch between runtime and tool.
+    /// ABI version mismatch between tool and runtime.
     AbiMismatch = 4,
     /// Tool initialization failed.
     InitFailed = 5,
-    /// Credential not found or invalid.
+    /// Credential validation or retrieval failed.
     CredentialError = 6,
 }
 
-/// Metadata about the tool crate.
+/// Metadata about a tool library.
+///
+/// This struct is exported by every tool library and contains version information
+/// used by the runtime to verify compatibility before loading the library.
 #[repr(C)]
 #[derive(StableAbi, Debug, Clone, Copy)]
 pub struct ToolMeta {
-    /// ABI version this tool was compiled with.
+    /// ABI version this library was built against.
+    /// Must match [`TOOL_ABI_VERSION`] for successful loading.
     pub abi_version: u32,
-    /// Crate name (e.g., "hello-world").
+    /// Crate name of the tool library (e.g., "my-tool").
     pub crate_name: RStr<'static>,
-    /// Crate version (e.g., "0.1.0").
+    /// SemVer version of the tool library (e.g., "1.2.3").
     pub crate_version: RStr<'static>,
 }
 
 impl ToolMeta {
+    /// Creates a new `ToolMeta` instance.
     #[must_use]
     pub const fn new(
         abi_version: u32,
@@ -90,81 +134,94 @@ impl ToolMeta {
     }
 }
 
-/// Descriptor for a single tool within a crate.
+/// Describes a tool's interface and capabilities.
 ///
-/// A crate may contain multiple tools, each with its own descriptor.
-/// The qualified name is "crate-name.tool-id" (e.g., "hello-world.greet").
+/// Each tool in a library must have a corresponding `ToolDescriptor` that describes
+/// its inputs, outputs, and metadata. This information is used by the runtime for
+/// validation, discovery, and tool selection.
 #[repr(C)]
 #[derive(StableAbi, Debug, Clone)]
 pub struct ToolDescriptor {
-    /// Unique identifier within the crate (e.g., "greet").
+    /// Unique identifier for this tool (e.g., "greet").
+    /// Combined with the crate name to form a qualified ID: `{crate_name}.{id}`.
     pub id: RStr<'static>,
-    /// Human-readable display name (e.g., "Say Hello!").
+    /// Human-readable name of the tool.
     pub name: RStr<'static>,
-    /// Human-readable description of what this tool does.
+    /// Description of what the tool does.
     pub description: RStr<'static>,
-    /// JSON Schema defining valid input.
+    /// JSON Schema describing the tool's input format.
     pub input_schema: RStr<'static>,
-    /// JSON Schema defining output format.
+    /// JSON Schema describing the tool's output format.
     pub output_schema: RStr<'static>,
-    /// JSON Schema for required credentials, if any.
+    /// Optional JSON Schema for credential validation.
+    /// If `None`, the tool does not require credentials.
     pub credential_schema: ROption<RStr<'static>>,
-    /// Required capabilities (e.g., "read", "write").
+    /// List of capabilities the tool provides (e.g., "read", "write").
     pub capabilities: RSlice<'static, RStr<'static>>,
-    /// Tags for categorization and discovery.
+    /// Tags for categorization and discovery (e.g., "utility", "ai").
     pub tags: RSlice<'static, RStr<'static>>,
-    /// Pre-computed embedding for semantic search.
+    /// Embedding vector for semantic search and tool matching.
+    /// Empty slice if no embedding is available.
     pub embedding: RSlice<'static, f32>,
 }
 
-/// Runtime context passed to tools during initialization.
+/// Context provided during tool initialization.
 ///
-/// Reserved for future use. May contain runtime configuration or
-/// shared resources in future versions.
+/// This struct is reserved for future use. Currently, it contains no fields
+/// but maintains a non-zero size for ABI stability.
 #[repr(C)]
 #[derive(StableAbi, Debug, Clone, Copy, Default)]
 pub struct RuntimeContext {
-    /// Reserved field to ensure the struct is not zero-sized.
-    /// Zero-sized types have special ABI considerations.
+    /// Reserved for future use.
     reserved: u8,
 }
 
 impl RuntimeContext {
+    /// Creates a new `RuntimeContext`.
     #[must_use]
     pub const fn new() -> Self {
         Self { reserved: 0 }
     }
 }
 
-/// Per-request context passed to tools during invocation.
+/// Context passed to each tool invocation.
 ///
-/// All data is borrowed from the runtime's call stack and valid only
-/// for the duration of the synchronous FFI call.
+/// Contains request metadata and credentials for a single tool call.
+/// The same context is provided to all tools invoked during a single request.
 #[repr(C)]
 #[derive(StableAbi, Debug, Clone, Copy)]
 pub struct CallContext<'a> {
-    /// For request tracing and correlation.
+    /// Unique identifier for this request (for tracing/logging).
     pub request_id: RStr<'a>,
-    /// For stateful multi-turn interactions.
+    /// Session identifier for grouping related requests.
     pub session_id: RStr<'a>,
-    /// Identifier for the calling user.
+    /// User identifier making the request.
     pub user_id: RStr<'a>,
-    /// Bincode-encoded user credentials.
+    /// User-specific credentials as serialized bytes.
+    /// Format: binary-serialized `HashMap<String, HashMap<String, String>>`.
     pub user_credentials: RSlice<'a, u8>,
-    /// Bincode-encoded system credentials.
+    /// System credentials for this tool as serialized bytes.
+    /// Format: binary-serialized credentials specific to the tool.
     pub system_credentials: RSlice<'a, u8>,
 }
 
-/// Result of an async tool call operation.
+/// Result returned by a tool invocation.
+///
+/// Contains both the status code and output data. The output field contains
+/// the serialized response data on success, or an error message on failure.
 #[repr(C)]
 #[derive(StableAbi, Debug, Clone)]
 pub struct CallResult {
+    /// Result code indicating success or failure type.
     pub result: ToolResult,
-    /// Output data, or error message on failure.
+    /// Output data or error message as bytes.
+    /// On success: serialized output according to the tool's output schema.
+    /// On error: UTF-8 encoded error message.
     pub output: RVec<u8>,
 }
 
 impl CallResult {
+    /// Creates a successful result with output data.
     #[must_use]
     pub fn ok(output: RVec<u8>) -> Self {
         Self {
@@ -173,6 +230,10 @@ impl CallResult {
         }
     }
 
+    /// Creates an error result with a message.
+    ///
+    /// The message will be UTF-8 encoded into the output field.
+    /// The `result` parameter should be a specific error code (not `ToolResult::Ok`).
     #[must_use]
     pub fn error(result: ToolResult, message: &str) -> Self {
         Self {
@@ -182,32 +243,39 @@ impl CallResult {
     }
 }
 
-/// Arguments for [`ToolInitFn`].
+/// Arguments passed to the tool initialization function.
 #[repr(C)]
 #[derive(StableAbi, Clone, Copy)]
 pub struct InitArgs {
+    /// Runtime context (currently empty, reserved for future use).
     pub ctx: RuntimeContext,
 }
 
 impl InitArgs {
+    /// Creates new initialization arguments.
     #[must_use]
     pub const fn new(ctx: RuntimeContext) -> Self {
         Self { ctx }
     }
 }
 
-/// Arguments for [`ToolCallFn`].
+/// Arguments passed to each tool invocation.
+///
+/// Contains the call context, tool identifier, and input data.
+/// The tool ID allows a single library to export multiple tools.
 #[repr(C)]
 #[derive(StableAbi)]
 pub struct CallArgs<'a> {
+    /// Request context with metadata and credentials.
     pub context: CallContext<'a>,
-    /// Which tool to invoke (e.g., "greet").
+    /// Identifier of the tool being invoked (matches a `ToolDescriptor::id`).
     pub tool_id: RStr<'a>,
-    /// JSON-encoded input data.
+    /// Input data as serialized bytes (according to the tool's input schema).
     pub input: RSlice<'a, u8>,
 }
 
 impl<'a> CallArgs<'a> {
+    /// Creates new call arguments.
     #[must_use]
     pub const fn new(context: CallContext<'a>, tool_id: RStr<'a>, input: RSlice<'a, u8>) -> Self {
         Self {
@@ -218,39 +286,56 @@ impl<'a> CallArgs<'a> {
     }
 }
 
-/// Function signature for tool initialization.
+/// Function pointer type for tool initialization.
+///
+/// Called once when the library is loaded. Must return `ToolResult::Ok` for
+/// successful initialization. Any other return value will prevent the library
+/// from being used.
 pub type ToolInitFn = extern "C" fn(args: InitArgs) -> FfiFuture<ToolResult>;
 
-/// Function signature for tool invocation.
+/// Function pointer type for tool invocation.
+///
+/// Called for each tool execution request. The function must deserialize
+/// the input, process the request, and return a `CallResult`.
 pub type ToolCallFn = extern "C" fn(args: CallArgs<'_>) -> FfiFuture<CallResult>;
 
-/// Function signature for tool shutdown.
+/// Function pointer type for tool cleanup.
+///
+/// Called when the library is being unloaded. This function should release
+/// any resources acquired during initialization.
 pub type ToolShutdownFn = extern "C" fn();
 
-/// Tool module - the main interface exposed by tool libraries.
+/// Root module exported by tool libraries.
 ///
-/// This is a prefix type that allows adding new fields in future versions
-/// while maintaining backward compatibility.
+/// Every Operai tool library must export a `ToolModule` as its root module.
+/// This struct contains metadata, descriptors for all tools in the library,
+/// and function pointers for the lifecycle operations.
+///
+/// The struct uses `abi_stable` attributes to enable versioning:
+/// - `#[sabi(kind(Prefix))]`: Allows adding new fields in future versions
+/// - `#[sabi(missing_field(panic))]`: Panics if a required field is missing
+/// - `#[sabi(unsafe_opaque_field)]`: Marks function pointers as opaque
+/// - `#[sabi(last_prefix_field)]`: Marks the last field that can be added in the current version
 #[repr(C)]
 #[derive(StableAbi)]
 #[sabi(kind(Prefix(prefix_ref = ToolModuleRef)))]
 #[sabi(missing_field(panic))]
 pub struct ToolModule {
-    /// Metadata about the tool crate.
+    /// Metadata about the library.
     pub meta: ToolMeta,
 
-    /// Array of tool descriptors.
+    /// Descriptors for all tools exported by this library.
     pub descriptors: RSlice<'static, ToolDescriptor>,
 
-    /// Called once after loading to initialize the tool library.
+    /// Initialization function pointer.
     #[sabi(unsafe_opaque_field)]
     pub init: ToolInitFn,
 
-    /// Invokes a tool by ID.
+    /// Tool invocation function pointer.
     #[sabi(unsafe_opaque_field)]
     pub call: ToolCallFn,
 
-    /// Called once before unloading to clean up resources.
+    /// Cleanup function pointer.
     #[sabi(last_prefix_field)]
     pub shutdown: ToolShutdownFn,
 }
@@ -264,6 +349,7 @@ impl RootModule for ToolModuleRef {
 }
 
 impl ToolModuleRef {
+    /// Returns an iterator over all tool descriptors in this module.
     pub fn descriptors_iter(&self) -> impl Iterator<Item = &ToolDescriptor> {
         self.descriptors().as_slice().iter()
     }

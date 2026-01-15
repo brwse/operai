@@ -1,86 +1,103 @@
-//! Operai Tool SDK for building native tools.
+//! # Operai Tool Framework
 //!
-//! This crate provides the SDK for building tools that can be loaded by the
-//! Operai Toolbox runtime. Tools are compiled as cdylib shared libraries and
-//! loaded dynamically at startup.
+//! This crate provides a framework for defining async tools that can be dynamically
+//! loaded and invoked through an FFI boundary. Tools are defined using the
+//! `#[tool]` attribute macro, which generates the necessary boilerplate for
+//! registration, serialization, and schema generation.
 //!
-//! # Quick Start
+//! ## Defining a Tool
+//!
+//! Tools are async functions with the signature:
 //!
 //! ```ignore
-//! use operai::{tool, Context, JsonSchema, Result};
-//! use serde::{Deserialize, Serialize};
-//!
-//! #[derive(Deserialize, JsonSchema)]
-//! struct Input {
-//!     name: String,
-//! }
-//!
-//! #[derive(Serialize, JsonSchema)]
-//! struct Output {
-//!     message: String,
-//! }
-//!
-//! /// # Greet
-//! ///
-//! /// Greets a user by name.
 //! #[tool]
-//! async fn greet(ctx: Context, input: Input) -> Result<Output> {
-//!     Ok(Output {
-//!         message: format!("Hello, {}!", input.name),
-//!     })
+//! async fn my_tool(ctx: Context, input: MyInput) -> Result<MyOutput> {
+//!     // ...
 //! }
+//! ```
 //!
-//! // Required: generates the FFI entrypoint
+//! Tool metadata is extracted from structured doc comments:
+//!
+//! ```ignore
+//! /// # Tool Name (ID: custom_id)
+//! ///
+//! /// Description of what the tool does.
+//!
+//! /// ## Capabilities
+//! /// - read
+//! /// - write
+//! ///
+//! /// ## Tags
+//! /// - utility
+//! #[tool]
+//! async fn my_tool(ctx: Context, input: MyInput) -> Result<MyOutput> {
+//!     Ok(MyOutput { /* ... */ })
+//! }
+//! ```
+//!
+//! The `Result` type is re-exported from `anyhow` and expands to `Result<T, anyhow::Error>`.
+//!
+//! ## Tool Module Entry Point
+//!
+//! At the end of your tool library, invoke the entrypoint macro:
+//!
+//! ```ignore
 //! operai::generate_tool_entrypoint!();
 //! ```
 //!
-//! # Lifecycle Hooks
+//! This generates the FFI-compatible module interface that the runtime uses to
+//! discover and invoke your tools.
 //!
-//! Tools can define initialization and shutdown functions for setup and
-//! cleanup:
+//! ## Context
+//!
+//! The `Context` parameter provides access to:
+//! - `request_id()`, `session_id()`, `user_id()` - Request metadata
+//! - `system_credential(name)` - System-level credentials
+//! - `user_credential(name)` - User-provided credentials
+//!
+//! ## Credentials
+//!
+//! Define credentials using the `define_system_credential!` and `define_user_credential!` macros:
 //!
 //! ```ignore
-//! use operai::{init, shutdown, Result};
+//! use operai::define_system_credential;
 //!
+//! define_system_credential!(ApiKey("api_key") {
+//!     /// API key for authentication
+//!     key: String,
+//!     #[optional]
+//!     /// Optional endpoint override
+//!     endpoint: Option<String>,
+//! });
+//!
+//! #[tool]
+//! async fn my_tool(ctx: Context, input: MyInput) -> Result<MyOutput> {
+//!     let api_key = ApiKey::get(&ctx)?;
+//!     Ok(MyOutput { /* use api_key.key */ })
+//! }
+//! ```
+//!
+//! Credentials come in two namespaces:
+//! - **System credentials**: Provider-level credentials configured by the operator
+//! - **User credentials**: User-specific credentials for authentication
+//!
+//! ## Lifecycle Hooks
+//!
+//! Use `#[init]` and `#[shutdown]` to define lifecycle hooks:
+//!
+//! ```ignore
 //! #[init]
 //! async fn setup() -> Result<()> {
-//!     // Initialize connections, load config, etc.
-//!     Ok(())
+//!     // Initialize resources
 //! }
 //!
 //! #[shutdown]
 //! fn cleanup() {
-//!     // Close connections, flush buffers, etc.
-//! }
-//! ```
-//!
-//! # Credentials
-//!
-//! Tools can define credentials that are either system-level (shared) or
-//! user-level (per-request):
-//!
-//! ```ignore
-//! use operai::{define_system_credential, define_user_credential};
-//!
-//! // System credentials come from manifest configuration
-//! define_system_credential! {
-//!     ApiCredential("api") {
-//!         api_key: String,
-//!         #[optional]
-//!         endpoint: Option<String>,
-//!     }
-//! }
-//!
-//! // User credentials are passed per-request via gRPC
-//! define_user_credential! {
-//!     UserToken("user_token") {
-//!         token: String,
-//!     }
+//!     // Release resources
 //! }
 //! ```
 
 // Allow proc-macro expansions within this crate to refer to it via `::operai`.
-#[doc(hidden)]
 extern crate self as operai;
 
 mod context;
@@ -90,8 +107,7 @@ mod entrypoint;
 // Re-export abi_stable so the `export_root_module` proc macro can find
 // `::abi_stable::` when the generate_tool_entrypoint! macro expands in
 // dependent crates.
-#[doc(hidden)]
-pub use abi_stable;
+extern crate abi_stable as _;
 pub use anyhow::{self, Result, bail, ensure};
 pub use context::Context;
 pub use credential::CredentialError;
@@ -102,8 +118,6 @@ pub use schemars;
 pub use schemars::JsonSchema;
 pub use tracing::{Level, debug, error, info, span, trace, warn};
 
-/// Private module for macro-generated code. Not part of the public API.
-#[doc(hidden)]
 pub mod __private {
     pub use anyhow;
     pub use inventory;
@@ -125,14 +139,9 @@ pub mod __private {
     }
 }
 
-/// Generates the FFI entrypoint for tool libraries.
-///
-/// Must be called once per crate. Generates the `abi_stable` root module
-/// that the runtime uses to discover and invoke tools.
 #[macro_export]
 macro_rules! generate_tool_entrypoint {
     () => {
-        #[doc(hidden)]
         mod __operai_entrypoint {
             use ::operai::__private::operai_abi as abi;
             use ::std::sync::OnceLock;

@@ -1,4 +1,35 @@
-//! Runtime abstractions for local and remote tool execution.
+//! Runtime implementations for tool execution.
+//!
+//! This module provides the core runtime abstractions for executing tools either
+//! locally (via dynamic loading) or remotely (via gRPC). The runtime handles tool
+//! discovery, invocation, policy enforcement, and metadata management.
+//!
+//! # Architecture
+//!
+//! The module provides two runtime implementations:
+//!
+//! - **[`LocalRuntime`]**: Executes tools locally by dynamically loading tool libraries
+//!   and invoking them through the Operai ABI. Supports in-process tool execution with
+//!   full policy enforcement.
+//! - **[`RemoteRuntime`]**: Connects to a remote Toolbox service over gRPC, forwarding
+//!   tool calls to a remote runtime. Useful for distributed deployments.
+//!
+//! - **[`Runtime`]**: A unified enum that wraps both local and remote implementations,
+//!   providing a polymorphic interface for tool operations.
+//!
+//! # Metadata
+//!
+//! All tool calls are accompanied by [`CallMetadata`], which includes:
+//! - Request, session, and user identifiers for tracing and authorization
+//! - Credentials for accessing external services
+//! - Policy evaluation context
+//!
+//! # Policy Enforcement
+//!
+//! Local runtimes enforce policies through a [`PolicyStore`]:
+//! - Pre-call policies evaluate before tool execution and can deny requests
+//! - Post-call policies evaluate after tool execution and can observe results
+//! - Policies are evaluated per-session, enabling fine-grained access control
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -17,34 +48,41 @@ use crate::proto::{
     toolbox_client::ToolboxClient,
 };
 
-/// Metadata associated with a tool call.
+/// Metadata associated with a tool invocation request.
+///
+/// This struct carries context information for tool calls, including identifiers
+/// for tracing, user authorization, and credentials for accessing external services.
 #[derive(Debug, Clone, Default)]
 pub struct CallMetadata {
-    /// Request identifier for tracing.
+    /// Unique identifier for this request (useful for tracing and logging).
     pub request_id: String,
-    /// Session identifier for stateful tools.
+    /// Session identifier for grouping related requests.
     pub session_id: String,
-    /// User identifier for auditing.
+    /// User identifier making the request.
     pub user_id: String,
-    /// Credential payloads keyed by provider.
+    /// Credentials keyed by provider name (e.g., "github", "slack").
+    /// Each provider maps to a set of key-value credential pairs.
     pub credentials: HashMap<String, HashMap<String, String>>,
 }
 
-/// Unified runtime abstraction for local or remote execution.
+/// Runtime that can execute tools either locally or remotely.
+///
+/// This enum provides a unified interface to either a local runtime (which executes
+/// tools in-process) or a remote runtime (which forwards calls over gRPC). Use this
+/// when you need to support both deployment modes.
 #[derive(Clone)]
 pub enum Runtime {
-    /// Local runtime backed by an in-process registry.
+    /// Local runtime that executes tools in-process.
     Local(LocalRuntime),
-    /// Remote runtime backed by a gRPC client.
+    /// Remote runtime that forwards calls to a gRPC service.
     Remote(RemoteRuntime),
 }
 
 impl Runtime {
-    /// Lists tools from the configured runtime.
+    /// Lists all available tools with pagination support.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying runtime fails to list tools.
+    /// Delegates to the underlying local or remote runtime to retrieve the list
+    /// of registered tools.
     pub async fn list_tools(&self, request: ListToolsRequest) -> Result<ListToolsResponse, Status> {
         match self {
             Self::Local(runtime) => runtime.list_tools(request).await,
@@ -52,12 +90,10 @@ impl Runtime {
         }
     }
 
-    /// Searches tools from the configured runtime.
+    /// Searches for tools using semantic similarity with an embedding vector.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if the search request is invalid or the runtime fails
-    /// to search.
+    /// Delegates to the underlying runtime to perform semantic search over tool
+    /// descriptions and metadata.
     pub async fn search_tools(
         &self,
         request: SearchToolsRequest,
@@ -68,12 +104,10 @@ impl Runtime {
         }
     }
 
-    /// Calls a tool on the configured runtime.
+    /// Invokes a tool by name with the given input and metadata.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if the tool cannot be invoked or the runtime fails to
-    /// process the call.
+    /// Delegates to the underlying runtime to execute the tool, enforcing
+    /// policies and returning the result.
     pub async fn call_tool(
         &self,
         request: CallToolRequest,
@@ -86,22 +120,45 @@ impl Runtime {
     }
 }
 
-/// Runtime implementation that executes tools locally.
+/// Local runtime that executes tools in-process.
+///
+/// This runtime manages a registry of dynamically-loaded tool libraries and executes
+/// tool calls locally. It enforces policies through a [`PolicyStore`] before and after
+/// tool execution, and handles serialization/deserialization of inputs and outputs.
+///
+/// # Tool Execution Flow
+///
+/// 1. Extract tool ID from request
+/// 2. Retrieve tool handle from registry
+/// 3. Evaluate pre-call policies (may deny request)
+/// 4. Serialize credentials and call context
+/// 5. Invoke tool via FFI boundary
+/// 6. Catch panics from tool execution
+/// 7. Evaluate post-call policies with result
+/// 8. Return response or error
+///
+/// # Thread Safety
+///
+/// The runtime can be safely shared across threads via `Arc`. Concurrent tool
+/// invocations are allowed, with each invocation tracked via an in-flight request guard.
 #[derive(Clone)]
 pub struct LocalRuntime {
+    /// Registry of available tools.
     registry: Arc<ToolRegistry>,
+    /// Policy store for access control.
     policy_store: Arc<PolicyStore>,
+    /// Runtime context (reserved for future use).
     runtime_ctx: RuntimeContext,
 }
 
 impl LocalRuntime {
-    /// Creates a local runtime from an existing registry and policy store.
+    /// Creates a new local runtime with default runtime context.
     #[must_use]
     pub fn new(registry: Arc<ToolRegistry>, policy_store: Arc<PolicyStore>) -> Self {
         Self::with_context(registry, policy_store, RuntimeContext::new())
     }
 
-    /// Creates a local runtime with an explicit runtime context.
+    /// Creates a new local runtime with the provided runtime context.
     #[must_use]
     pub fn with_context(
         registry: Arc<ToolRegistry>,
@@ -115,34 +172,39 @@ impl LocalRuntime {
         }
     }
 
-    /// Returns the tool registry backing this runtime.
+    /// Returns a reference to the tool registry.
     #[must_use]
     pub fn registry(&self) -> &Arc<ToolRegistry> {
         &self.registry
     }
 
-    /// Returns the policy store backing this runtime.
+    /// Returns a reference to the policy store.
     #[must_use]
     pub fn policy_store(&self) -> &Arc<PolicyStore> {
         &self.policy_store
     }
 
-    /// Returns the runtime context used for tool initialization.
+    /// Returns a reference to the runtime context.
     #[must_use]
     pub fn runtime_context(&self) -> &RuntimeContext {
         &self.runtime_ctx
     }
 
-    /// Waits for any in-flight calls to complete.
+    /// Waits for all in-flight tool invocations to complete.
+    ///
+    /// This is useful for graceful shutdown, ensuring that all running tools
+    /// have completed before the runtime is dropped.
     pub async fn drain(&self) {
         self.registry.drain().await;
     }
 
-    /// Lists tools from the local registry.
+    /// Lists all available tools with pagination support.
     ///
-    /// # Errors
+    /// # Pagination
     ///
-    /// This method currently never returns an error.
+    /// - `page_size`: Maximum items per page (default: 100, max: 1000)
+    /// - `page_token`: Offset to start from (parsed as `usize`, default: 0)
+    /// - Returns `next_page_token` for pagination (empty string indicates last page)
     pub async fn list_tools(&self, request: ListToolsRequest) -> Result<ListToolsResponse, Status> {
         let page_size: usize = if request.page_size <= 0 {
             100
@@ -175,11 +237,11 @@ impl LocalRuntime {
         })
     }
 
-    /// Searches tools from the local registry.
+    /// Searches for tools using semantic similarity with an embedding vector.
     ///
     /// # Errors
     ///
-    /// Returns an error if the query embedding is missing or invalid.
+    /// Returns `Status::invalid_argument` if `query_embedding` is empty.
     pub async fn search_tools(
         &self,
         request: SearchToolsRequest,
@@ -221,12 +283,25 @@ impl LocalRuntime {
         })
     }
 
-    /// Calls a tool via the local registry and policy engine.
+    /// Invokes a tool by name with the provided input and metadata.
+    ///
+    /// # Execution Flow
+    ///
+    /// 1. Extract tool ID and retrieve handle from registry
+    /// 2. Acquire in-flight request guard
+    /// 3. Evaluate pre-call policies (may return permission denied)
+    /// 4. Serialize credentials and context for FFI
+    /// 5. Invoke tool through FFI boundary
+    /// 6. Catch and handle panics
+    /// 7. Evaluate post-call policies with result
+    /// 8. Return tool output or error
     ///
     /// # Errors
     ///
-    /// Returns an error if the tool name is invalid, the tool is missing,
-    /// policy evaluation fails, or the tool execution fails.
+    /// - `invalid_argument`: Tool name format is invalid
+    /// - `not_found`: Tool does not exist in registry
+    /// - `permission_denied`: Pre-call policy rejected the request
+    /// - `internal`: Policy evaluation error, serialization failure, or tool panic
     pub async fn call_tool(
         &self,
         request: CallToolRequest,
@@ -340,45 +415,39 @@ impl LocalRuntime {
     }
 }
 
-/// Runtime implementation that forwards requests to a remote gRPC server.
 #[derive(Clone)]
 pub struct RemoteRuntime {
     client: ToolboxClient<Channel>,
 }
 
 impl RemoteRuntime {
-    /// Connects to a remote runtime at the given endpoint.
+    /// Connects to a remote Toolbox gRPC service.
+    ///
+    /// Automatically adds `http://` prefix if the endpoint doesn't already
+    /// start with `http://` or `https://`.
     ///
     /// # Errors
     ///
-    /// Returns an error if the endpoint is invalid or the connection fails.
+    /// Returns a tonic transport error if connection fails.
     pub async fn connect(endpoint: impl AsRef<str>) -> Result<Self, tonic::transport::Error> {
         let endpoint = normalize_endpoint(endpoint.as_ref());
         let client = ToolboxClient::connect(endpoint).await?;
         Ok(Self { client })
     }
 
-    /// Creates a remote runtime from an existing client.
+    /// Creates a new remote runtime from an existing gRPC client.
     #[must_use]
     pub fn new(client: ToolboxClient<Channel>) -> Self {
         Self { client }
     }
 
-    /// Lists tools from the remote runtime.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the remote runtime returns a non-success status.
+    /// Lists all available tools from the remote service.
     pub async fn list_tools(&self, request: ListToolsRequest) -> Result<ListToolsResponse, Status> {
         let response = self.client.clone().list_tools(request).await?.into_inner();
         Ok(response)
     }
 
-    /// Searches tools from the remote runtime.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the remote runtime returns a non-success status.
+    /// Searches for tools using semantic similarity via the remote service.
     pub async fn search_tools(
         &self,
         request: SearchToolsRequest,
@@ -392,12 +461,9 @@ impl RemoteRuntime {
         Ok(response)
     }
 
-    /// Calls a tool on the remote runtime.
+    /// Invokes a tool by name via the remote service.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if the metadata cannot be applied or the remote call
-    /// fails.
+    /// Metadata is attached to the gRPC request as headers before sending.
     pub async fn call_tool(
         &self,
         request: CallToolRequest,
@@ -411,6 +477,10 @@ impl RemoteRuntime {
     }
 }
 
+/// Converts a [`ToolInfo`] to a protobuf `Tool` message.
+///
+/// Adds the "tools/" prefix to the qualified ID and converts JSON schema
+/// strings to protobuf Struct format.
 pub(crate) fn tool_info_to_proto(info: &ToolInfo) -> Tool {
     Tool {
         name: format!("tools/{}", info.qualified_id),
@@ -424,15 +494,24 @@ pub(crate) fn tool_info_to_proto(info: &ToolInfo) -> Tool {
     }
 }
 
+/// Extracts the tool ID from a tool name by removing the "tools/" prefix.
+///
+/// Returns `None` if the name doesn't start with "tools/".
 pub(crate) fn extract_tool_id(name: &str) -> Option<&str> {
     name.strip_prefix("tools/")
 }
 
+/// Converts a JSON string to a protobuf `Struct`.
+///
+/// Returns `None` if the string is not valid JSON or not an object.
 pub(crate) fn json_str_to_struct(json: &str) -> Option<prost_types::Struct> {
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
     json_value_to_struct(&value)
 }
 
+/// Converts a `serde_json::Value` to a protobuf `Struct`.
+///
+/// Returns `None` if the value is not a JSON object.
 pub(crate) fn json_value_to_struct(value: &serde_json::Value) -> Option<prost_types::Struct> {
     match value {
         serde_json::Value::Object(map) => {
@@ -446,6 +525,7 @@ pub(crate) fn json_value_to_struct(value: &serde_json::Value) -> Option<prost_ty
     }
 }
 
+/// Converts a `serde_json::Value` to a protobuf `Value`.
 fn json_value_to_prost_value(value: &serde_json::Value) -> prost_types::Value {
     use prost_types::value::Kind;
 
@@ -470,6 +550,7 @@ fn json_value_to_prost_value(value: &serde_json::Value) -> prost_types::Value {
     prost_types::Value { kind: Some(kind) }
 }
 
+/// Converts a protobuf `Struct` to a `serde_json::Value`.
 pub(crate) fn struct_to_json_value(s: &prost_types::Struct) -> serde_json::Value {
     let map: serde_json::Map<String, serde_json::Value> = s
         .fields
@@ -479,6 +560,7 @@ pub(crate) fn struct_to_json_value(s: &prost_types::Struct) -> serde_json::Value
     serde_json::Value::Object(map)
 }
 
+/// Converts a protobuf `Value` to a `serde_json::Value`.
 pub(crate) fn prost_value_to_json_value(value: &prost_types::Value) -> serde_json::Value {
     use prost_types::value::Kind;
 
@@ -498,6 +580,7 @@ pub(crate) fn prost_value_to_json_value(value: &prost_types::Value) -> serde_jso
     }
 }
 
+/// Normalizes an endpoint URL by adding `http://` prefix if needed.
 fn normalize_endpoint(endpoint: &str) -> String {
     if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
         endpoint.to_string()
@@ -506,6 +589,18 @@ fn normalize_endpoint(endpoint: &str) -> String {
     }
 }
 
+/// Applies call metadata to a gRPC request as headers.
+///
+/// Adds the following headers:
+/// - `x-request-id`: Request identifier
+/// - `x-session-id`: Session identifier
+/// - `x-user-id`: User identifier
+/// - `x-credential-{provider}`: Base64-encoded credential data for each provider
+///
+/// # Errors
+///
+/// Returns `Status::invalid_argument` if header names or values are invalid.
+/// Returns `Status::internal` if credential serialization fails.
 fn apply_call_metadata(
     request: &mut Request<CallToolRequest>,
     metadata: &CallMetadata,
@@ -531,6 +626,7 @@ fn apply_call_metadata(
     Ok(())
 }
 
+/// Inserts a header into the metadata map if the value is non-empty.
 fn insert_header(
     headers: &mut tonic::metadata::MetadataMap,
     key: &'static str,
@@ -546,6 +642,7 @@ fn insert_header(
     Ok(())
 }
 
+/// Helper struct for serializing credential data to JSON.
 #[derive(serde::Serialize)]
 struct CredentialData<'a> {
     values: &'a HashMap<String, String>,

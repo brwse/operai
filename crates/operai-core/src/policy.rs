@@ -1,3 +1,39 @@
+//! Policy evaluation and enforcement using Common Expression Language (CEL).
+//!
+//! This module provides a policy system for controlling tool execution through
+//! conditional effects that can modify execution context and enforce guards.
+//! Policies are defined using CEL expressions and can be evaluated before or
+//! after tool execution.
+//!
+//! # Key Concepts
+//!
+//! - **Policy**: A collection of effects with shared context
+//! - **Effect**: A conditional action that applies to specific tools at a specific stage
+//! - **Stage**: Before or after tool execution
+//! - **Compilation**: CEL expressions are compiled to Programs for efficient evaluation
+//! - **Session**: Maintains context and history across policy evaluations
+//!
+//! # Example
+//!
+//! ```ignore
+//! let policy = Policy {
+//!     name: "safety_checks".into(),
+//!     version: "1.0.0".into(),
+//!     context: HashMap::new(),
+//!     effects: vec![Effect {
+//!         tool: "dangerous.*".into(),
+//!         stage: PolicyStage::Before,
+//!         condition: "context.safe_mode == true".into(),
+//!         fail_message: Some("Operation blocked: safe mode enabled".into()),
+//!         updates: HashMap::new(),
+//!     }],
+//! };
+//!
+//! let compiled = policy.compile()?;
+//! let mut session = PolicySession::default();
+//! compiled.evaluate_pre_effects(&mut session, "dangerous.nuke", &input)?;
+//! ```
+
 use std::{collections::HashMap, sync::Arc};
 
 use cel_interpreter::{
@@ -11,74 +47,111 @@ use thiserror::Error;
 pub mod session;
 use session::{HistoryEvent, PolicySession};
 
-/// Stage of policy evaluation.
+/// When a policy effect should be evaluated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyStage {
+    /// Evaluate before tool execution.
+    /// Can block execution via `fail_message` or modify input via `updates`.
     Before,
+    /// Evaluate after tool execution.
+    /// Can modify context based on tool output via `updates`.
     #[default]
     After,
 }
 
-/// Core Definition of an Operai Protocol.
+/// A policy definition containing conditional effects for controlling tool execution.
+///
+/// Policies are evaluated against tool invocations to enforce guards and
+/// modify execution context. They use CEL (Common Expression Language) for
+/// flexible, composable condition expressions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Policy {
+    /// Unique identifier for this policy.
     pub name: String,
+    /// Version string for policy tracking and compatibility.
     pub version: String,
 
+    /// Initial context variables available to all CEL expressions in this policy.
     #[serde(default)]
     pub context: HashMap<String, JsonValue>,
 
+    /// Effects to evaluate when tools are invoked.
     #[serde(default)]
     pub effects: Vec<Effect>,
 }
 
+/// A conditional effect that can modify execution or block tool invocations.
+///
+/// Effects are evaluated in the context of a specific tool invocation and can
+/// update policy context or enforce guards based on CEL conditions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Effect {
+    /// Tool name pattern this effect applies to.
+    /// Supports glob patterns: "*" (all tools), "group.*" (tools in a group).
     pub tool: String,
 
-    /// Stage when this effect is evaluated.
-    /// Default: After
+    /// When this effect should be evaluated.
     #[serde(default)]
     pub stage: PolicyStage,
 
-    /// CEL expression. Must evaluate to boolean.
-    /// Variables: history, context, input, tool. (Output/Result only for After
-    /// stage)
+    /// CEL condition expression that must evaluate to `true` for this effect to apply.
     #[serde(rename = "when")]
     pub condition: String,
 
-    /// If present and condition evaluates to false, return this error message.
-    /// Acts as a Guard.
+    /// Error message to return if the condition fails in `Before` stage.
+    /// If `None`, a failed condition simply skips the effect.
     pub fail_message: Option<String>,
 
-    /// Maps context keys to CEL expressions that generate their new values.
+    /// Context variables to update when the condition succeeds.
+    /// Keys are variable names, values are CEL expressions.
     #[serde(rename = "set", default)]
     pub updates: HashMap<String, String>,
 }
 
+/// Errors that can occur during policy evaluation.
 #[derive(Debug, Error)]
 pub enum PolicyError {
+    /// A guard condition failed and tool execution was blocked.
     #[error("Guard failed: {0}")]
     GuardFailed(String),
+
+    /// CEL parsing or syntax error.
     #[error("CEL error: {0}")]
     CelError(String),
+
+    /// Runtime error during CEL expression evaluation.
     #[error("Evaluation error: {0}")]
     EvalError(String),
+
+    /// Error compiling CEL expressions to Programs.
     #[error("Compilation error: {0}")]
     CompilationError(String),
 }
 
+/// A compiled effect ready for evaluation.
+///
+/// Contains the original effect definition alongside compiled CEL programs
+/// for efficient runtime evaluation.
 #[derive(Debug)]
 pub struct CompiledEffect {
+    /// The original effect definition.
     pub original: Effect,
+    /// Compiled CEL condition program.
     pub condition: Program,
+    /// Compiled CEL update expressions (variable name -> program).
     pub updates: HashMap<String, Program>,
 }
 
+/// A compiled policy ready for evaluation.
+///
+/// Created by compiling a `Policy` to validate CEL expressions and prepare
+/// them for efficient execution.
 #[derive(Debug)]
 pub struct CompiledPolicy {
+    /// The original policy definition.
     pub original: Policy,
+    /// Compiled effects for evaluation.
     pub effects: Vec<CompiledEffect>,
 }
 
@@ -89,11 +162,14 @@ impl From<ParseErrors> for PolicyError {
 }
 
 impl Policy {
-    /// Compiles the policy into an executable form.
+    /// Compiles all CEL expressions in this policy for efficient evaluation.
+    ///
+    /// Validates that all condition and update expressions are valid CEL and
+    /// compiles them to `Program` objects for runtime execution.
     ///
     /// # Errors
     ///
-    /// Returns `PolicyError` if a CEL expression fails to compile.
+    /// Returns `PolicyError::CompilationError` if any CEL expression fails to parse.
     pub fn compile(self) -> Result<CompiledPolicy, PolicyError> {
         let mut compiled_effects = Vec::new();
         for effect in &self.effects {
@@ -123,18 +199,29 @@ impl Policy {
 }
 
 impl CompiledPolicy {
-    /// Evaluate "Before" effects (Guards & Reservations).
-    /// Returns error if any guard fails (`fail_message` present && condition
-    /// checks out as false? wait, logic check). Guard Logic: If
-    /// `fail_message` is set, and `condition` is FALSE, then ERROR
-    /// (`GuardFailed`). Wait, user data says: `when: "safe_mode == true"`. If
-    /// `safe_mode` is false, condition is false. So: if condition is false,
-    /// and `fail_message` is Some -> Error. Reservation Logic: If condition
-    /// is true -> Apply updates.
+    /// Evaluates all `Before` stage effects for a tool invocation.
+    ///
+    /// This is called before tool execution to enforce guards and optionally
+    /// modify the policy context. Effects are evaluated in order; if any guard
+    /// fails with a `fail_message`, execution is blocked.
+    ///
+    /// # CEL Context Variables
+    ///
+    /// - `context`: Policy session context (HashMap)
+    /// - `history`: Recent tool execution history (last 5 events)
+    /// - `input`: Tool input JSON
+    /// - `tool`: Map with `name` key containing the tool name
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(true)`: Context was modified and should be persisted
+    /// - `Ok(false)`: No changes to context
+    /// - `Err(PolicyError::GuardFailed(msg))`: Execution blocked
     ///
     /// # Errors
-    /// Returns `PolicyError` if CEL evaluation fails or if a guard condition is
-    /// not met.
+    ///
+    /// - Returns `PolicyError::EvalError` if CEL evaluation fails
+    /// - Returns `PolicyError::GuardFailed` if a guard condition fails with a fail message
     pub fn evaluate_pre_effects(
         &self,
         state: &mut PolicySession,
@@ -171,7 +258,6 @@ impl CompiledPolicy {
                     ));
                 };
 
-                // Guard Logic
                 if !condition_met {
                     if let Some(msg) = &effect.original.fail_message {
                         return Err(PolicyError::GuardFailed(msg.clone()));
@@ -179,7 +265,6 @@ impl CompiledPolicy {
                     continue;
                 }
 
-                // Reservation Logic (Apply Updates)
                 if !effect.updates.is_empty() {
                     for (key, expr_prog) in &effect.updates {
                         let new_val_cel = expr_prog.execute(&cel_ctx).map_err(|e| {
@@ -198,10 +283,24 @@ impl CompiledPolicy {
         Ok(modified)
     }
 
-    /// Evaluate "After" effects.
+    /// Evaluates all `After` stage effects for a tool invocation.
+    ///
+    /// This is called after tool execution to update policy context based on
+    /// the tool's result. Always adds a history event for the invocation.
+    ///
+    /// # CEL Context Variables
+    ///
+    /// - `context`: Policy session context (HashMap)
+    /// - `history`: Recent tool execution history (last 5 events)
+    /// - `input`: Tool input JSON
+    /// - `tool`: Map with `name` key containing the tool name
+    /// - `output`: Tool output JSON (null if error)
+    /// - `error`: Error message string (only present if tool failed)
+    /// - `result`: Map with `is_ok` boolean key
     ///
     /// # Errors
-    /// Returns `PolicyError` if CEL evaluation fails.
+    ///
+    /// Returns `PolicyError::EvalError` if CEL evaluation fails.
     pub fn evaluate_post_effects(
         &self,
         state: &mut PolicySession,
@@ -270,7 +369,6 @@ impl CompiledPolicy {
             }
         }
 
-        // Append to history - ONLY in Post Effect phase? Yes.
         state.history.push(HistoryEvent {
             tool: tool_name.to_string(),
             input: input.clone(),
@@ -284,8 +382,13 @@ impl CompiledPolicy {
     }
 }
 
-// --- Helpers ---
-
+/// Checks if a tool name matches a pattern.
+///
+/// # Patterns
+///
+/// - `"*"`: Matches all tools
+/// - `"group.*"`: Matches `group` and any tool with a `group.` prefix (e.g., `group.subtool`)
+/// - `"exact_name"`: Matches only the exact tool name
 fn matches_tool_pattern(pattern: &str, tool_id: &str) -> bool {
     if pattern == "*" {
         return true;
@@ -296,8 +399,7 @@ fn matches_tool_pattern(pattern: &str, tool_id: &str) -> bool {
     pattern == tool_id
 }
 
-// Simple conversions. Ideally use a crate but for now manual mapping is
-// safer/lighter.
+/// Converts a `serde_json::Value` to a CEL `Value`.
 fn to_cel_json(v: &JsonValue) -> Value {
     match v {
         JsonValue::Null => Value::Null,
@@ -325,6 +427,7 @@ fn to_cel_json(v: &JsonValue) -> Value {
     }
 }
 
+/// Converts a JSON HashMap to a CEL Map value.
 fn to_cel_value(map: &HashMap<String, JsonValue>) -> Value {
     let mut m = HashMap::new();
     for (k, v) in map {
@@ -333,6 +436,7 @@ fn to_cel_value(map: &HashMap<String, JsonValue>) -> Value {
     Value::Map(CelMap { map: Arc::new(m) })
 }
 
+/// Converts a CEL `Value` back to a `serde_json::Value`.
 fn cel_to_json(v: Value) -> JsonValue {
     match v {
         Value::Int(i) => JsonValue::Number(i.into()),
@@ -345,19 +449,22 @@ fn cel_to_json(v: Value) -> JsonValue {
         Value::Map(m) => {
             let mut map = serde_json::Map::new();
             for (k, v) in m.map.iter() {
-                // CEL map keys can be anything, JSON keys must be strings
                 if let Key::String(s) = k {
                     map.insert(s.to_string(), cel_to_json(v.clone()));
                 }
             }
             JsonValue::Object(map)
         }
-        _ => JsonValue::String(format!("{v:?}")), // Fallback for Bytes, Duration, Timestamp
+        _ => JsonValue::String(format!("{v:?}")),
     }
 }
 
+/// Maximum number of history events exposed to CEL expressions.
 const MAX_HISTORY_ITEMS: usize = 5;
 
+/// Converts history events to a CEL list value.
+///
+/// Returns the last `MAX_HISTORY_ITEMS` events (most recent).
 fn to_cel_history(hist: &[HistoryEvent]) -> Value {
     let start = hist.len().saturating_sub(MAX_HISTORY_ITEMS);
     let list: Vec<Value> = hist[start..]
@@ -387,7 +494,6 @@ mod tests {
             version: "1".into(),
             context: HashMap::new(),
             effects: vec![Effect {
-                // Guard as a Before effect
                 tool: "dangerous.*".into(),
                 stage: PolicyStage::Before,
                 condition: "context.safe_mode == true".into(),

@@ -1,4 +1,35 @@
-//! Manifest parsing for tool configuration.
+//! Manifest parsing and configuration for the Operai toolkit.
+//!
+//! This module provides functionality for loading and parsing TOML manifest files
+//! that define tool configurations and policies. Manifests specify:
+//!
+//! - **Tools**: Dynamic libraries that can be loaded, including their paths, checksums,
+//!   and enabled/disabled status
+//! - **Policies**: Rules that govern tool execution, either defined inline or referenced
+//!   via file paths
+//! - **Config**: Arbitrary configuration data as TOML key-value pairs
+//!
+//! # Example
+//!
+//! ```toml
+//! [[tools]]
+//! path = "target/release/libhello.dylib"
+//! enabled = true
+//!
+//! [[policies]]
+//! name = "my-policy"
+//! version = "1.0"
+//! [[policies.effects]]
+//! tool = "*"
+//! stage = "after"
+//! when = "true"
+//! ```
+//!
+//! # Validation
+//!
+//! The manifest enforces that policies cannot specify both `path` (file reference)
+//! and inline fields (`effects`, `context`) simultaneously. Policies must either
+//! reference an external file or be fully defined inline.
 
 use std::path::Path;
 
@@ -7,70 +38,85 @@ use serde_json::Value as JsonValue;
 
 use crate::Policy;
 
-/// Errors that can occur when parsing a manifest.
+/// Errors that can occur when loading or parsing a manifest file.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ManifestError {
-    /// Failed to read the manifest file.
+    /// I/O error when reading the manifest file from disk.
     #[error("failed to read manifest: {0}")]
     Io(#[from] std::io::Error),
 
-    /// Failed to parse the manifest.
+    /// TOML parsing error when the manifest file is malformed.
     #[error("failed to parse manifest: {0}")]
     Parse(#[from] toml::de::Error),
 
-    /// Policy definition error.
+    /// Policy definition validation error.
+    ///
+    /// This occurs when a policy configuration is invalid, such as specifying
+    /// both a file path and inline policy fields simultaneously.
     #[error("invalid policy definition: {0}")]
     Policy(String),
 }
 
-/// Tool manifest configuration.
+/// A manifest defining tool and policy configurations.
 ///
-/// The manifest is a TOML file that lists tool libraries to load and policies
-/// to enforce.
-///
-/// # Example
-///
-/// ```toml
-/// [config]
-/// embedding_model = "fastembed"
-///
-/// [[tools]]
-/// name = "hello-world"
-/// enabled = true
-///
-/// [[policies]]
-/// name = "audit-logging"
-/// version = "1.0"
-/// [[policies.effects]]
-/// tool = "*"
-/// stage = "after"
-/// when = "true"
-/// ```
+/// The manifest is the central configuration file for an Operai project, loaded
+/// from a TOML file. It specifies which tools are available and which policies
+/// govern their execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
+    /// List of tool configurations.
+    ///
+    /// Tools are dynamic libraries that can be loaded and invoked. Each tool
+    /// can be enabled or disabled individually.
     #[serde(default)]
     pub tools: Vec<ToolConfig>,
 
+    /// List of policy configurations.
+    ///
+    /// Policies define rules for tool execution, evaluated before and/or after
+    /// tool invocations. Policies may be defined inline or referenced via file paths.
     #[serde(default)]
     pub policies: Vec<PolicyConfig>,
 
-    /// Project configuration (build settings, etc).
-    /// Kept generic here as it's primarily used by `cargo-operai`.
+    /// Arbitrary configuration data.
+    ///
+    /// This can contain any TOML table with project-specific configuration
+    /// that tools or policies may reference.
     pub config: Option<toml::Table>,
 }
 
 impl Manifest {
-    /// Loads a manifest from the specified path.
+    /// Loads and parses a manifest file from the given path.
     ///
-    /// # Errors
+    /// This method reads the TOML file at the specified path, parses it into a
+    /// `Manifest`, and validates policy configurations. Policy validation ensures
+    /// that a policy cannot specify both a `path` field and inline fields
+    /// (`effects` or `context`) simultaneously.
     ///
-    /// Returns an error if the file cannot be read or parsed.
+    /// # Parameters
+    ///
+    /// - `path`: Path to the TOML manifest file
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Manifest)` if the file is successfully loaded and validated.
+    /// Returns `Err(ManifestError)` if:
+    /// - The file cannot be read (I/O error)
+    /// - The TOML is malformed (parse error)
+    /// - A policy configuration is invalid (validation error)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use operai_core::Manifest;
+    ///
+    /// let manifest = Manifest::load("operai.toml").expect("Failed to load manifest");
+    /// ```
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ManifestError> {
         let content = std::fs::read_to_string(&path)?;
         let manifest: Self = toml::from_str(&content)?;
 
-        // Validate policies
         for policy_config in &manifest.policies {
             if policy_config.path.is_some()
                 && (policy_config.effects.is_some() || policy_config.context.is_some())
@@ -85,6 +131,10 @@ impl Manifest {
         Ok(manifest)
     }
 
+    /// Creates an empty manifest with no tools or policies.
+    ///
+    /// This is useful for testing or as a starting point for programmatically
+    /// building manifest configurations.
     #[must_use]
     pub fn empty() -> Self {
         Self {
@@ -94,17 +144,50 @@ impl Manifest {
         }
     }
 
+    /// Returns an iterator over only the enabled tools in the manifest.
+    ///
+    /// This filters the `tools` list to return only tools where `enabled` is `true`.
+    ///
+    /// # Returns
+    ///
+    /// An iterator yielding references to `ToolConfig` items that are enabled.
     #[must_use = "iterator should be consumed to access enabled tools"]
     pub fn enabled_tools(&self) -> impl Iterator<Item = &ToolConfig> {
         self.tools.iter().filter(|t| t.enabled)
     }
 
-    /// Resolves all policies, loading file-based policies relative to the
-    /// manifest path.
+    /// Resolves all policy configurations into concrete `Policy` instances.
     ///
-    /// # Errors
+    /// This method processes the policy configurations in the manifest:
     ///
-    /// Returns an error if a policy file cannot be read or parsed.
+    /// - For policies with a `path` field, loads the policy from the external file
+    ///   (relative to the manifest directory)
+    /// - For inline policies (with `name`, `version`, `context`, `effects` fields),
+    ///   constructs a `Policy` directly from the configuration
+    ///
+    /// # Parameters
+    ///
+    /// - `manifest_path`: Path to the manifest file (used to resolve relative
+    ///   policy file paths)
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Vec<Policy>)` containing all resolved policies.
+    /// Returns `Err(ManifestError)` if:
+    /// - An external policy file cannot be read
+    /// - An external policy file fails to parse
+    /// - An inline policy is missing required fields (e.g., `name`)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use operai_core::Manifest;
+    /// use std::path::Path;
+    ///
+    /// # let manifest = Manifest::empty();
+    /// let policies = manifest.resolve_policies(Path::new("operai.toml"))
+    ///     .expect("Failed to resolve policies");
+    /// ```
     pub fn resolve_policies(&self, manifest_path: &Path) -> Result<Vec<Policy>, ManifestError> {
         let root_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
 
@@ -118,11 +201,6 @@ impl Manifest {
                 let policy: Policy = toml::from_str(&content).map_err(ManifestError::Parse)?;
                 policies.push(policy);
             } else {
-                // Inline policy
-                // We need to convert PolicyConfig to Policy.
-                // Since PolicyConfig is a superset/subset, we might need manual conversion
-                // or ensure PolicyConfig can be converted.
-                // For now, let's assume inline definition MUST have name/version.
                 let name = config.name.clone().ok_or_else(|| {
                     ManifestError::Policy("Inline policy must have a name".to_string())
                 })?;
@@ -146,26 +224,40 @@ impl Manifest {
     }
 }
 
-/// Configuration for a single tool library.
+/// Configuration for a single tool in the manifest.
+///
+/// Tools are dynamic libraries that can be loaded by the Operai runtime.
+/// This struct defines where to find the tool and how to load it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolConfig {
-    /// Name of the tool for name-based resolution.
-    /// If `path` is not specified, the tool will be auto-resolved from
-    /// configured search directories using this name.
+    /// Optional name identifying the tool.
+    ///
+    /// If not specified, the tool name may be derived from the library path
+    /// or the tool's own metadata.
     pub name: Option<String>,
 
-    /// Path to the dynamic library.
-    /// If specified, this takes precedence over name-based resolution.
+    /// Path to the tool's dynamic library file.
+    ///
+    /// This can be an absolute path or a path relative to the manifest directory.
+    /// The file format is platform-dependent (e.g., `.dylib` on macOS, `.so` on Linux).
     pub path: Option<String>,
 
-    /// Checksum of the tool binary for verification (SHA256).
+    /// Optional checksum for verifying the tool's integrity.
+    ///
+    /// This can be used to ensure the loaded library has not been modified.
     pub checksum: Option<String>,
 
-    /// Defaults to `true` if not specified in the manifest.
+    /// Whether the tool is currently enabled.
+    ///
+    /// Disabled tools are defined in the manifest but will not be loaded.
+    /// Defaults to `true` if not specified in the TOML.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 
-    /// System credentials injected when loading this tool.
+    /// Credential configuration for the tool.
+    ///
+    /// A nested map where the outer key identifies a credential type or service,
+    /// and the inner map contains key-value pairs for that credential.
     #[serde(default)]
     pub credentials: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 }
@@ -174,18 +266,44 @@ fn default_enabled() -> bool {
     true
 }
 
-/// Configuration for a policy.
-/// Can be inline or file-based.
+/// Configuration for a policy in the manifest.
+///
+/// Policies can be defined in one of two mutually exclusive ways:
+///
+/// 1. **External reference**: Specify only `path` to load a policy from a separate file
+/// 2. **Inline definition**: Specify `name`, and optionally `version`, `context`, and `effects`
+///
+/// The manifest validation enforces that these two approaches cannot be mixed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyConfig {
-    /// Path to policy file (relative to manifest).
+    /// Path to an external policy file (relative to the manifest directory).
+    ///
+    /// If specified, `name`, `version`, `context`, and `effects` must all be `None`.
+    /// The external file should contain a complete policy definition in TOML format.
     pub path: Option<String>,
 
-    // Inline fields (Optional if path is set)
+    /// Policy name (required for inline policies).
+    ///
+    /// Must be specified if `path` is `None`. This identifies the policy and
+    /// is used in policy evaluation and error messages.
     pub name: Option<String>,
+
+    /// Policy version (optional for inline policies).
+    ///
+    /// If not specified, defaults to "0.0.0".
     pub version: Option<String>,
+
+    /// Initial context variables for the policy (optional for inline policies).
+    ///
+    /// A map of variable names to JSON values that will be available to
+    /// CEL expressions in the policy's effects.
     #[serde(default)]
     pub context: Option<std::collections::HashMap<String, JsonValue>>,
+
+    /// List of effects defining the policy's behavior (optional for inline policies).
+    ///
+    /// Effects are rules that are evaluated before or after tool execution,
+    /// potentially blocking execution or modifying the policy context.
     #[serde(default)]
     pub effects: Option<Vec<crate::policy::Effect>>,
 }

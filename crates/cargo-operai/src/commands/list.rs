@@ -1,14 +1,41 @@
-//! `cargo operai list` command implementation.
+//! List tools available from a remote toolbox server.
+//!
+//! This module provides functionality to query and display tools available from
+//! a running toolbox server. It supports both table and JSON output formats.
 
 use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
 use operai_runtime::proto::toolbox_client::ToolboxClient;
 
+/// Removes the "tools/" prefix from a tool name if present.
+///
+/// # Arguments
+///
+/// * `name` - The tool name to normalize
+///
+/// # Returns
+///
+/// The tool name without the "tools/" prefix, or the original name if the
+/// prefix is not present.
 fn normalize_tool_name(name: &str) -> &str {
     name.strip_prefix("tools/").unwrap_or(name)
 }
 
+/// Truncates a description string to fit within a maximum character limit.
+///
+/// If the description exceeds 40 characters, it truncates to 37 characters
+/// and appends "..." to indicate truncation. The function operates on Unicode
+/// grapheme clusters rather than bytes.
+///
+/// # Arguments
+///
+/// * `description` - The description text to potentially truncate
+///
+/// # Returns
+///
+/// Either the original description (if ≤ 40 chars) or the truncated version
+/// with "..." appended (totaling 40 chars).
 fn truncate_description(description: &str) -> String {
     const MAX_DESCRIPTION_CHARS: usize = 40;
     const ELLIPSIS: &str = "...";
@@ -25,18 +52,41 @@ fn truncate_description(description: &str) -> String {
     format!("{prefix}{ELLIPSIS}")
 }
 
-/// Arguments for the `list` command.
+/// Command-line arguments for the list command.
+///
+/// This struct is parsed by `clap` and configures how tools are listed from
+/// the remote toolbox server.
 #[derive(Args)]
 pub struct ListArgs {
-    /// Server address.
+    /// Address of the toolbox server to connect to (e.g., "http://127.0.0.1:50051")
     #[arg(short, long, default_value = "http://127.0.0.1:50051")]
     pub server: String,
 
-    /// Output format (table or json).
+    /// Output format: "table" for human-readable table or "json" for machine-readable JSON
     #[arg(short, long, default_value = "table")]
     pub format: String,
 }
 
+/// Executes the list command to retrieve and display tools from a toolbox server.
+///
+/// This function connects to the remote toolbox server, queries all available tools,
+/// and outputs them in either a human-readable table format or machine-readable JSON.
+///
+/// # Arguments
+///
+/// * `args` - Configuration including server address and output format
+///
+/// # Returns
+///
+/// Returns `Ok(())` on success, or an error if:
+/// - Connection to the server fails
+/// - The server returns an error response
+/// - JSON serialization fails (when using JSON format)
+///
+/// # Output Formats
+///
+/// - **table**: Prints a formatted table with columns for tool ID, name, and description
+/// - **json**: Prints a JSON array with complete tool information including schemas
 pub async fn run(args: &ListArgs) -> Result<()> {
     let mut client = ToolboxClient::connect(args.server.clone())
         .await
@@ -92,6 +142,19 @@ pub async fn run(args: &ListArgs) -> Result<()> {
     Ok(())
 }
 
+/// Converts a protobuf Tool message to a JSON value.
+///
+/// This transforms the tool's protobuf representation into a more idiomatic
+/// JSON structure with camelCase keys for better compatibility with JSON conventions.
+///
+/// # Arguments
+///
+/// * `tool` - The protobuf Tool message to convert
+///
+/// # Returns
+///
+/// A JSON object containing the tool's data with keys: name, displayName,
+/// version, description, inputSchema, outputSchema, capabilities, and tags.
 fn tool_to_json(tool: operai_runtime::proto::Tool) -> serde_json::Value {
     serde_json::json!({
         "name": tool.name,
@@ -105,6 +168,16 @@ fn tool_to_json(tool: operai_runtime::proto::Tool) -> serde_json::Value {
     })
 }
 
+/// Converts a protobuf Struct message to a JSON object.
+///
+/// # Arguments
+///
+/// * `s` - The protobuf Struct to convert
+///
+/// # Returns
+///
+/// A JSON Value::Object containing the struct's fields with values converted
+/// via `prost_value_to_json`.
 fn struct_to_json(s: prost_types::Struct) -> serde_json::Value {
     let map = s
         .fields
@@ -114,6 +187,19 @@ fn struct_to_json(s: prost_types::Struct) -> serde_json::Value {
     serde_json::Value::Object(map)
 }
 
+/// Converts a protobuf Value to a serde_json Value.
+///
+/// Recursively handles all protobuf value types including null, number, string,
+/// boolean, struct, and list values.
+///
+/// # Arguments
+///
+/// * `v` - The protobuf Value to convert
+///
+/// # Returns
+///
+/// The equivalent serde_json::Value. Note that numbers that cannot be
+/// represented as valid JSON numbers (e.g., NaN, infinity) are converted to null.
 fn prost_value_to_json(v: prost_types::Value) -> serde_json::Value {
     match v.kind {
         Some(prost_types::value::Kind::NullValue(_)) | None => serde_json::Value::Null,
@@ -140,6 +226,10 @@ mod tests {
 
     use super::*;
 
+    /// Mock toolbox implementation for testing the list command.
+    ///
+    /// Provides a simple in-memory implementation that returns a fixed set
+    /// of tools without requiring a real toolbox server.
     struct MockToolbox;
 
     #[tonic::async_trait]

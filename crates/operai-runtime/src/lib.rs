@@ -1,6 +1,49 @@
-//! Operai Toolbox library.
+//! Operai runtime for tool execution and management.
 //!
-//! This crate provides the gRPC service implementation for the Operai Toolbox.
+//! This crate provides the runtime layer for the Operai tool system, responsible for:
+//!
+//! - **Tool Discovery**: Loading and registering dynamic tool libraries
+//! - **Tool Execution**: Invoking tools with policy enforcement and credential management
+//! - **Remote Access**: gRPC and MCP transports for serving tools over the network
+//! - **Policy Enforcement**: Pre- and post-execution policy checks
+//!
+//! # Architecture
+//!
+//! The runtime is built around three main components:
+//!
+//! - [`RuntimeBuilder`] - Constructs configured runtime instances
+//! - [`Runtime`] - Enum that abstracts over local and remote execution
+//! - [`LocalRuntime`]/[`RemoteRuntime`] - Concrete implementations for in-process and networked tool execution
+//!
+//! # Local vs Remote Execution
+//!
+//! The runtime can operate in two modes:
+//!
+//! - **Local**: Loads tool libraries dynamically and executes them in-process with full policy enforcement
+//! - **Remote**: Connects to a remote gRPC server and delegates tool execution
+//!
+//! # Example
+//!
+//! ```no_run
+//! use operai_runtime::RuntimeBuilder;
+//!
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let runtime = RuntimeBuilder::new()
+//!     .local()
+//!     .build()
+//!     .await?;
+//!
+//! // List available tools
+//! let tools = runtime.list_tools(
+//!     operai_runtime::proto::ListToolsRequest {
+//!         page_size: 100,
+//!         page_token: String::new(),
+//!     }
+//! ).await?;
+//! # Ok(())
+//! # }
+//! ```
 
 #[expect(
     clippy::doc_markdown,
@@ -14,8 +57,20 @@ pub mod proto {
     include!("gen/brwse/toolbox/v1alpha1/brwse.toolbox.v1alpha1.rs");
 }
 
+/// Builder module for constructing configured runtime instances.
+///
+/// See [`RuntimeBuilder`] for the main builder API.
 pub mod builder;
+
+/// Core runtime implementations for local and remote tool execution.
+///
+/// Provides [`Runtime`] (enum abstracting local/remote), [`LocalRuntime`] (in-process execution),
+/// and [`RemoteRuntime`] (gRPC client).
 pub mod runtime;
+
+/// Transport layer implementations for serving tools over network protocols.
+///
+/// Includes gRPC and MCP (feature-gated) transport implementations.
 pub mod transports;
 
 pub use builder::RuntimeBuilder;

@@ -1,47 +1,154 @@
-//! Credential types and registration.
+
+//! Credential schema definitions and runtime introspection.
+//!
+//! This module provides types for defining and registering credential schemas
+//! that can be discovered at runtime. Credentials are used to authenticate with
+//! external services and APIs (e.g., API keys, OAuth tokens, database credentials).
+//!
+//! # Defining Credentials
+//!
+//! Credentials are defined using the `define_system_credential!` and
+//! `define_user_credential!` macros from the `operai-macro` crate:
+//!
+//! ```ignore
+//! use operai::define_system_credential;
+//!
+//! define_system_credential!(ApiKey("api_key") {
+//!     /// API key for authentication
+//!     key: String,
+//!     #[optional]
+//!     /// Optional endpoint override
+//!     endpoint: Option<String>,
+//! });
+//! ```
+//!
+//! The macro generates:
+//! - A struct with the provided fields
+//! - A `get(ctx: &Context)` method for retrieving the credential
+//! - Registration with the credential inventory
+//!
+//! # Using Credentials
+//!
+//! To retrieve a credential value, call the generated `get()` method:
+//!
+//! ```ignore
+//! #[operai::tool]
+//! async fn my_tool(ctx: operai::Context, input: Input) -> operai::Result<Output> {
+//!     let api_key = ApiKey::get(&ctx)?;
+//!     Ok(Output { /* use api_key.key */ })
+//! }
+//! ```
+//!
+//! # Credential Namespaces
+//!
+//! Credentials are organized into two separate namespaces:
+//!
+//! - **System credentials**: Provider-level credentials configured by the operator
+//! - **User credentials**: User-specific credentials for authentication
+//!
+//! Both namespaces are independent, allowing the same credential name to exist in both
+//! with different values. Use `define_system_credential!` for system credentials and
+//! `define_user_credential!` for user credentials.
+//!
+//! # Runtime Discovery
+//!
+//! Registered credentials can be iterated at runtime using `inventory::iter`:
+//!
+//! ```ignore
+//! use operai::credential::CredentialEntry;
+//!
+//! for entry in inventory::iter::<CredentialEntry>() {
+//!     println!("Credential: {}", entry.name);
+//!     for (field_name, field_schema) in entry.fields {
+//!         println!("  - {}: {} (required: {})",
+//!             field_name, field_schema.description, field_schema.required);
+//!     }
+//! }
+//! ```
 
 use serde::Serialize;
 
 use crate::entrypoint::Sealed;
 
-/// Errors that can occur when accessing credentials.
+/// Errors that can occur when working with credentials.
+///
+/// This enum represents the various failure modes that can arise during
+/// credential lookup, deserialization, or validation.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum CredentialError {
-    /// The requested credential was not found.
+    /// A requested credential could not be found.
+    ///
+    /// This typically occurs when the runtime attempts to retrieve a credential
+    /// by name but no matching credential has been registered or configured.
     #[error("credential '{0}' not found")]
     NotFound(String),
 
-    /// Failed to deserialize the credential.
+    /// Failed to deserialize credential data.
+    ///
+    /// This occurs when credential data exists but cannot be parsed into its
+    /// expected type, typically due to malformed data or schema mismatches.
     #[error("failed to deserialize credential: {0}")]
     DeserializationError(String),
 }
 
-/// Schema for a single field within a credential.
+/// Schema definition for a single credential field.
+///
+/// This struct describes the metadata for a field within a credential schema,
+/// including its purpose and whether it is mandatory or optional.
 #[derive(Debug, Clone, Serialize)]
 pub struct CredentialFieldSchema {
+    /// Human-readable description of what this field represents.
     pub description: &'static str,
+
+    /// Whether this field must be provided for the credential to be valid.
     pub required: bool,
 }
 
-/// Registry entry for a credential definition.
+/// A registered credential type schema.
 ///
-/// This struct can only be constructed by the `define_system_credential!` and
-/// `define_user_credential!` macros because it requires a [`Sealed`] token
-/// that cannot be created outside this crate.
+/// `CredentialEntry` represents a credential type that can be discovered and
+/// used at runtime. Each entry defines the structure of a specific credential
+/// type, including its name, description, and the fields it requires.
 ///
-/// # Sealed Construction
+/// # Sealed
 ///
-/// The `__sealed` field uses the [sealed trait pattern](https://predr.ag/blog/definitive-guide-to-sealed-traits-in-rust/)
-/// to prevent external construction. This ensures that all credential entries
-/// are properly registered through the macro system.
+/// The `__sealed` field prevents instances of this type from being constructed
+/// outside of the registration mechanism. This ensures all credential entries
+/// go through the proper `inventory::submit!` process.
+///
+/// # Serialization
+///
+/// When serialized, `CredentialEntry` produces a JSON object with the following structure:
+///
+/// ```json
+/// {
+///   "name": "credential_name",
+///   "description": "Human-readable description",
+///   "fields": {
+///     "field_name": {
+///       "description": "Field description",
+///       "required": true
+///     }
+///   }
+/// }
+/// ```
+///
+/// Note that the `__sealed` field is intentionally excluded from serialization.
 #[derive(Debug)]
 pub struct CredentialEntry {
-    /// Unique identifier for the credential (e.g., "api").
+    /// Unique identifier for this credential type.
     pub name: &'static str,
+
+    /// Human-readable description of this credential type.
     pub description: &'static str,
+
+    /// Ordered list of field definitions for this credential.
+    ///
+    /// Each tuple contains the field name and its schema definition.
     pub fields: &'static [(&'static str, CredentialFieldSchema)],
-    /// Sealed token preventing external construction.
+
+    /// Seal to prevent construction outside of registration.
     #[doc(hidden)]
     pub __sealed: Sealed,
 }
@@ -53,7 +160,6 @@ impl Serialize for CredentialEntry {
     {
         use serde::ser::{SerializeMap, SerializeStruct};
 
-        /// Wrapper to serialize a slice of tuples as a map without allocation.
         struct FieldsMap<'a>(&'a [(&'static str, CredentialFieldSchema)]);
 
         impl Serialize for FieldsMap<'_> {
@@ -77,7 +183,11 @@ impl Serialize for CredentialEntry {
     }
 }
 
-// Collect credential entries for runtime introspection
+/// Collect credential entries for runtime introspection.
+///
+/// This macro invocation registers `CredentialEntry` with the `inventory` crate,
+/// enabling runtime discovery of all registered credential types via
+/// `inventory::iter::<CredentialEntry>()`.
 inventory::collect!(CredentialEntry);
 
 #[cfg(test)]

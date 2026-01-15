@@ -1,4 +1,33 @@
-//! Runtime builder for local or remote execution.
+//! Builder for constructing Operai runtime instances.
+//!
+//! This module provides [`RuntimeBuilder`], a fluent builder API for configuring and
+//! constructing either local or remote runtime instances. The builder handles:
+//!
+//! - **Manifest Loading**: Parsing tool configurations from `operai.toml`
+//! - **Tool Registration**: Loading dynamic tool libraries and static tool modules
+//! - **Policy Setup**: Resolving and registering policy enforcement rules
+//! - **Runtime Mode**: Choosing between local execution or remote gRPC connections
+//!
+//! # Usage
+//!
+//! ```no_run
+//! use operai_runtime::RuntimeBuilder;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! // Build a local runtime with custom manifest path
+//! let runtime = RuntimeBuilder::new()
+//!     .with_manifest_path("custom/operai.toml")
+//!     .build_local()
+//!     .await?;
+//!
+//! // Build a remote runtime
+//! let remote = RuntimeBuilder::new()
+//!     .remote("localhost:50051")
+//!     .build_remote()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
 
 use std::{
     fmt,
@@ -17,16 +46,18 @@ use tracing::{error, info, warn};
 
 use crate::runtime::{LocalRuntime, RemoteRuntime, Runtime};
 
-/// Errors that can occur while building a runtime.
+/// Errors that can occur during runtime construction.
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeBuildError {
-    /// Manifest loading or parsing failed.
+    /// Failed to load or parse the manifest file.
     #[error("failed to load manifest: {0}")]
     Manifest(#[from] operai_core::ManifestError),
-    /// Remote endpoint was not configured.
+
+    /// Attempted to build a remote runtime without configuring an endpoint.
     #[error("remote endpoint is required")]
     MissingRemoteEndpoint,
-    /// Remote connection failed.
+
+    /// Failed to establish a connection to a remote runtime.
     #[error("failed to connect to remote runtime: {0}")]
     Transport(#[from] tonic::transport::Error),
 }
@@ -37,7 +68,36 @@ enum RuntimeMode {
     Remote { endpoint: String },
 }
 
-/// Configures and builds a runtime.
+/// Fluent builder for constructing [`Runtime`] instances.
+///
+/// `RuntimeBuilder` provides a configurable way to set up either local or remote
+/// runtime instances. It supports:
+///
+/// - Custom manifest paths for tool configuration
+/// - Runtime context injection for environment-specific settings
+/// - Local tool library loading from dynamic libraries
+/// - Static tool module registration (when `static-link` feature is enabled)
+/// - Remote runtime connections via gRPC
+///
+/// # Default Configuration
+///
+/// - Manifest path: `operai.toml` in the current directory
+/// - Runtime mode: Local execution
+/// - Static tools: None (empty list)
+///
+/// # Example
+///
+/// ```no_run
+/// # use operai_runtime::RuntimeBuilder;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let runtime = RuntimeBuilder::new()
+///     .with_manifest_path("tools/operai.toml")
+///     .local()
+///     .build()
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct RuntimeBuilder {
     manifest_path: PathBuf,
@@ -63,7 +123,13 @@ impl fmt::Debug for RuntimeBuilder {
 }
 
 impl RuntimeBuilder {
-    /// Creates a builder with default settings.
+    /// Creates a new builder with default configuration.
+    ///
+    /// # Default Values
+    ///
+    /// - Manifest path: `operai.toml`
+    /// - Runtime context: Empty (newly created)
+    /// - Mode: Local execution
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -75,35 +141,59 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Sets the manifest path used for local runtime initialization.
+    /// Sets the path to the manifest file (`operai.toml`).
+    ///
+    /// The manifest file defines which tools should be loaded and any policies
+    /// that should be enforced. If not set, defaults to `operai.toml` in the
+    /// current directory.
+    ///
+    /// # Parameters
+    ///
+    /// - `path`: Path to the manifest file (relative or absolute)
     #[must_use]
     pub fn with_manifest_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.manifest_path = path.into();
         self
     }
 
-    /// Overrides the runtime context passed to tool initialization.
+    /// Sets the runtime context for tool execution.
+    ///
+    /// The runtime context provides environment-specific configuration and
+    /// capabilities that tools may access during execution.
+    ///
+    /// # Parameters
+    ///
+    /// - `ctx`: The runtime context to use
     #[must_use]
     pub fn with_runtime_context(mut self, ctx: RuntimeContext) -> Self {
         self.runtime_ctx = ctx;
         self
     }
 
-    /// Builds a local runtime.
+    /// Builds a [`LocalRuntime`] instance.
+    ///
+    /// This method loads tools from the configured manifest, initializes
+    /// the policy store, and constructs a local runtime that executes tools
+    /// in-process. Tool loading failures are logged but do not prevent the
+    /// runtime from being built.
     ///
     /// # Errors
     ///
-    /// Returns an error if the manifest cannot be loaded or parsed.
+    /// Returns [`RuntimeBuildError::Manifest`] if the manifest file cannot be
+    /// loaded or parsed.
     pub async fn build_local(self) -> Result<LocalRuntime, RuntimeBuildError> {
         build_local_runtime(self).await
     }
 
-    /// Builds a remote runtime.
+    /// Builds a [`RemoteRuntime`] connected to a gRPC endpoint.
+    ///
+    /// The builder must be configured for remote mode using [`remote`](Self::remote)
+    /// before calling this method. Tool execution is delegated to the remote server.
     ///
     /// # Errors
     ///
-    /// Returns an error if no remote endpoint is configured or the connection
-    /// fails.
+    /// - [`RuntimeBuildError::MissingRemoteEndpoint`] if the builder is in local mode
+    /// - [`RuntimeBuildError::Transport`] if the connection fails
     pub async fn build_remote(self) -> Result<RemoteRuntime, RuntimeBuildError> {
         let endpoint = match self.mode {
             RuntimeMode::Remote { endpoint } => endpoint,
@@ -114,12 +204,16 @@ impl RuntimeBuilder {
         Ok(RemoteRuntime::connect(endpoint).await?)
     }
 
-    /// Builds the runtime based on the configured mode.
+    /// Builds a [`Runtime`] enum based on the configured mode.
+    ///
+    /// This is a convenience method that returns either a local or remote runtime
+    /// based on the builder's current mode configuration.
     ///
     /// # Errors
     ///
-    /// Returns an error if manifest loading fails for local mode or the remote
-    /// connection fails.
+    /// - [`RuntimeBuildError::Manifest`] if loading the manifest fails (local mode)
+    /// - [`RuntimeBuildError::MissingRemoteEndpoint`] if remote mode is not configured
+    /// - [`RuntimeBuildError::Transport`] if the remote connection fails
     pub async fn build(self) -> Result<Runtime, RuntimeBuildError> {
         match self.mode.clone() {
             RuntimeMode::Local => Ok(Runtime::Local(build_local_runtime(self).await?)),
@@ -131,14 +225,24 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Configures the builder to create a local runtime.
+    /// Configures the builder for local execution mode.
+    ///
+    /// Tools will be loaded and executed in the current process. This is the
+    /// default mode.
     #[must_use]
     pub fn local(mut self) -> Self {
         self.mode = RuntimeMode::Local;
         self
     }
 
-    /// Configures the builder to create a remote runtime.
+    /// Configures the builder for remote execution mode.
+    ///
+    /// Tool execution will be delegated to a remote gRPC server. The endpoint
+    /// can be specified with or without the `http://` prefix.
+    ///
+    /// # Parameters
+    ///
+    /// - `endpoint`: Remote server address (e.g., `localhost:50051` or `http://localhost:50051`)
     #[must_use]
     pub fn remote(mut self, endpoint: impl Into<String>) -> Self {
         self.mode = RuntimeMode::Remote {
@@ -147,7 +251,15 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Registers a statically linked tool module.
+    /// Registers a statically-linked tool module.
+    ///
+    /// This method is only available when the `static-link` feature is enabled.
+    /// Static tools are compiled directly into the binary rather than loaded
+    /// from dynamic libraries.
+    ///
+    /// # Parameters
+    ///
+    /// - `module`: Reference to a statically-linked tool module
     #[cfg(feature = "static-link")]
     #[must_use]
     pub fn with_static_tool(mut self, module: ToolModuleRef) -> Self {
@@ -162,6 +274,17 @@ impl Default for RuntimeBuilder {
     }
 }
 
+/// Builds a local runtime from the builder configuration.
+///
+/// This internal function handles the core logic of constructing a local runtime:
+///
+/// 1. Loads the manifest from the configured path (or returns empty if missing)
+/// 2. Creates a tool registry and loads all enabled tool libraries
+/// 3. Registers any static tool modules
+/// 4. Initializes the policy store and registers policies from the manifest
+///
+/// Tool loading failures are logged but do not prevent runtime construction.
+/// Policy registration failures are similarly logged and skipped.
 async fn build_local_runtime(builder: RuntimeBuilder) -> Result<LocalRuntime, RuntimeBuildError> {
     let manifest_path = builder.manifest_path;
     let runtime_ctx = builder.runtime_ctx;
@@ -235,6 +358,18 @@ async fn build_local_runtime(builder: RuntimeBuilder) -> Result<LocalRuntime, Ru
     ))
 }
 
+/// Loads a manifest from the given path, returning an empty manifest if not found.
+///
+/// This graceful degradation allows the runtime to start even without a manifest
+/// file, useful for testing or purely static tool configurations.
+///
+/// # Parameters
+///
+/// - `manifest_path`: Path to the manifest file
+///
+/// # Returns
+///
+/// - `Ok(Manifest)` - The loaded manifest, or an empty one if the file doesn't exist
 fn load_manifest_or_empty(manifest_path: &Path) -> Result<Manifest, RuntimeBuildError> {
     if manifest_path.exists() {
         Ok(Manifest::load(manifest_path)?)
@@ -247,6 +382,27 @@ fn load_manifest_or_empty(manifest_path: &Path) -> Result<Manifest, RuntimeBuild
     }
 }
 
+/// Resolves the filesystem path for a tool library.
+///
+/// This function implements the tool resolution strategy, which tries multiple
+/// approaches in order:
+///
+/// 1. **Explicit path**: If `tool.path` is set, use it (absolute or relative to manifest dir)
+/// 2. **Name-based search**: If `tool.name` is set, search in standard locations:
+///    - `<manifest_dir>/target/release/`
+///    - `/usr/local/lib/operai/`
+///    - `<workspace_root>/target/release/` (if in a workspace)
+///    - `~/.operai/tools/` (home directory)
+///
+/// # Parameters
+///
+/// - `tool`: Tool configuration containing either a path or name
+/// - `manifest_dir`: Directory containing the manifest file (for resolving relative paths)
+///
+/// # Returns
+///
+/// - `Some(PathBuf)` - Resolved path to the tool library
+/// - `None` - No path or name specified in the tool config
 fn resolve_tool_path(tool: &operai_core::ToolConfig, manifest_dir: &Path) -> Option<PathBuf> {
     // 1. Explicit path takes precedence
     if let Some(path) = &tool.path {
@@ -311,6 +467,18 @@ fn resolve_tool_path(tool: &operai_core::ToolConfig, manifest_dir: &Path) -> Opt
     None
 }
 
+/// Normalizes a remote endpoint URL by ensuring it has a scheme.
+///
+/// If the endpoint already starts with `http://` or `https://`, it is returned
+/// unchanged. Otherwise, `http://` is prepended.
+///
+/// # Parameters
+///
+/// - `endpoint`: The endpoint to normalize
+///
+/// # Returns
+///
+/// A URL with an `http://` or `https://` scheme
 fn normalize_endpoint(endpoint: &str) -> String {
     if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
         endpoint.to_string()
@@ -321,6 +489,10 @@ fn normalize_endpoint(endpoint: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Integration tests for the runtime builder.
+    ///
+    /// These tests build a hello-world tool library and verify that the builder
+    /// can load tools from both explicit paths and name-based resolution.
     use std::{
         path::{Path, PathBuf},
         process::Command,

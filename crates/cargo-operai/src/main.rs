@@ -1,15 +1,27 @@
-//! Cargo subcommand for Operai Tool SDK development.
+//! Cargo custom subcommand for the Operai tool framework.
 //!
-//! Usage:
-//! ```bash
-//! cargo operai new my-tool        # Create new tool project
-//! cargo operai build              # Build with embeddings
-//! cargo operai serve              # Run local dev server
-//! cargo operai mcp                # Run MCP server
-//! cargo operai call <tool> <json> # Test a tool
-//! cargo operai list               # List available tools
-//! cargo operai describe <tool>    # Show tool details
-//! ```
+//! This binary implements `cargo operai`, providing a CLI for:
+//! - Creating new Operai tool projects (`new`)
+//! - Building Operai tools (`build`)
+//! - Running tool servers (`serve`)
+//! - Running MCP servers (`mcp`)
+//! - Calling tools remotely (`call`)
+//! - Listing available tools (`list`)
+//! - Describing tools (`describe`)
+//!
+//! # Command Structure
+//!
+//! The CLI follows Cargo's convention for custom subcommands, using a two-level
+//! parsing structure:
+//!
+//! - `cargo operai <command>` - Top-level invocation
+//! - Subcommands: `new`, `build`, `serve`, `mcp`, `call`, `list`, `describe`
+//!
+//! # Logging
+//!
+//! All commands use structured logging via `tracing` with output to stderr.
+//! The default log level is `info`, configurable via the `RUST_LOG` environment
+//! variable.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -23,56 +35,89 @@ pub(crate) mod testing {
 
     use tokio::sync::Mutex;
 
+    /// Acquires a synchronous test lock.
+    ///
+    /// This provides a static mutex for synchronizing tests that need to
+    /// prevent concurrent execution (e.g., tests that modify shared state
+    /// or use exclusive resources).
+    ///
+    /// # Returns
+    ///
+    /// A mutex guard that will release the lock when dropped.
     pub(crate) fn test_lock() -> tokio::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(())).blocking_lock()
     }
 
+    /// Acquires an asynchronous test lock.
+    ///
+    /// This provides a static mutex for synchronizing async tests that need to
+    /// prevent concurrent execution. Unlike [`test_lock`], this uses async locking.
+    ///
+    /// # Returns
+    ///
+    /// A mutex guard that will release the lock when dropped.
     pub(crate) async fn test_lock_async() -> tokio::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(())).lock().await
     }
 }
 
+/// Top-level Cargo command parser.
+///
+/// This enum implements Cargo's convention for custom subcommands by matching
+/// on the `cargo` binary name and extracting the `operai` subcommand.
 #[derive(Debug, Parser)]
 #[command(name = "cargo")]
 #[command(bin_name = "cargo")]
 enum Cargo {
-    /// Operai Tool SDK commands
     Operai(Operai),
 }
 
+/// Operai command-line interface.
+///
+/// This struct represents the `cargo operai` invocation and dispatches to
+/// the appropriate subcommand handler.
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
 struct Operai {
+    /// The subcommand to execute.
     #[command(subcommand)]
     command: Command,
 }
 
+/// Available Operai subcommands.
+///
+/// Each variant corresponds to a distinct operation and contains the
+/// arguments specific to that command.
 #[derive(Subcommand)]
 enum Command {
-    /// Create a new tool project
+    /// Create a new Operai tool project.
     New(commands::new::NewArgs),
 
-    /// Build the tool (runs embed + cargo build --release)
+    /// Build an Operai tool.
     Build(commands::build::BuildArgs),
 
-    /// Serve tools locally for development
+    /// Start a tool server.
     Serve(commands::serve::ServeArgs),
 
-    /// Serve tools over MCP
+    /// Start an MCP server.
     Mcp(commands::mcp::McpArgs),
 
-    /// Call a tool for testing
+    /// Call a tool remotely.
     Call(commands::call::CallArgs),
 
-    /// List available tools
+    /// List available tools.
     List(commands::list::ListArgs),
 
-    /// Describe a specific tool
+    /// Describe a tool's schema.
     Describe(commands::describe::DescribeArgs),
 }
 
+/// Custom Debug implementation for Command.
+///
+/// Intentionally omits the inner arguments to provide cleaner logging output.
+/// Only the variant name is displayed, not the full command arguments.
 impl std::fmt::Debug for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -87,6 +132,16 @@ impl std::fmt::Debug for Command {
     }
 }
 
+/// Entry point for the `cargo operai` CLI.
+///
+/// Initializes structured logging and dispatches to the appropriate command
+/// handler based on the parsed CLI arguments.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Logging initialization fails
+/// - Command execution fails
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -116,6 +171,22 @@ mod tests {
 
     use super::*;
 
+    /// Helper function to parse command-line arguments and extract the Command.
+    ///
+    /// This utility is used throughout the test suite to verify that CLI arguments
+    /// are parsed correctly.
+    ///
+    /// # Arguments
+    ///
+    /// * `argv` - Command-line arguments (e.g., `&["cargo", "operai", "new", "my-tool"]`)
+    ///
+    /// # Returns
+    ///
+    /// The parsed [`Command`] enum variant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`clap::Error`] if the arguments fail to parse.
     fn parse_command(argv: &[&str]) -> Result<Command, clap::Error> {
         let Cargo::Operai(parsed) = Cargo::try_parse_from(argv.iter().copied())?;
         Ok(parsed.command)

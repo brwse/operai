@@ -1,4 +1,11 @@
-//! `cargo operai call` command implementation.
+//! Tool invocation CLI command.
+//!
+//! This module implements the `cargo operai call` command, which invokes a remote tool
+//! via a gRPC toolbox server. It handles:
+//! - Parsing tool invocation arguments
+//! - Loading credentials from files or CLI arguments
+//! - Converting between JSON and Protocol Buffer Struct formats
+//! - Managing tool calls with proper metadata and credentials
 
 use std::{collections::HashMap, path::PathBuf};
 
@@ -7,31 +14,52 @@ use clap::Args;
 use console::style;
 use operai_runtime::{CallMetadata, RuntimeBuilder};
 
-/// Arguments for the `call` command.
+/// Command-line arguments for the tool call subcommand.
 #[derive(Args)]
 pub struct CallArgs {
-    /// Tool ID to call (e.g., "hello-world.greet").
+    /// Identifier of the tool to call (e.g., "my-tool" or "namespace/my-tool")
     pub tool_id: String,
 
-    /// Input JSON (inline or @file.json).
+    /// Input data for the tool as a JSON string, or "@" followed by a file path to read JSON from
     pub input: String,
 
+    /// Address of the toolbox server (defaults to "localhost:50051")
     #[arg(short, long, default_value = "localhost:50051")]
     pub server: String,
 
-    /// Credentials in the format `provider:key=value;key2=value2`.
-    /// Can be specified multiple times.
-    /// Values starting with `env:` will be read from environment variables.
-    /// Use `\;` and `\=` to escape data.
+    /// Credential overrides in format "provider:key=value;key2=value2"
+    ///
+    /// Supports multiple uses. CLI credentials take precedence over file credentials.
+    /// Values can reference environment variables with "env:VAR_NAME" syntax.
+    /// Special characters (= and ;) can be escaped with backslash.
     #[arg(short = 'C', long = "creds")]
     pub credentials: Vec<String>,
 
-    /// Path to a TOML file containing credentials.
-    /// Defaults to `~/.config/operai/credentials.toml`.
+    /// Path to a TOML credentials file (optional)
+    ///
+    /// If not specified, defaults to ~/.config/operai/credentials.toml
     #[arg(long = "creds-file")]
     pub credentials_file: Option<PathBuf>,
 }
 
+/// Executes a tool call to the remote toolbox server.
+///
+/// # Process
+/// 1. Reads input JSON (from string or file if prefixed with '@')
+/// 2. Loads credentials from file and/or CLI arguments
+/// 3. Connects to the toolbox server
+/// 4. Converts input JSON to Protocol Buffer Struct format
+/// 5. Sends the tool invocation request with credentials
+/// 6. Prints the result or error
+///
+/// # Errors
+/// Returns an error if:
+/// - Input file cannot be read
+/// - Input JSON is malformed
+/// - Credentials file is not found (when explicitly specified)
+/// - Credentials file is malformed
+/// - Connection to toolbox server fails
+/// - Tool invocation fails
 pub async fn run(args: &CallArgs) -> Result<()> {
     let input_json = if args.input.starts_with('@') {
         let path = PathBuf::from(&args.input[1..]);
@@ -94,6 +122,11 @@ pub async fn run(args: &CallArgs) -> Result<()> {
     Ok(())
 }
 
+/// Converts a JSON value to a Protocol Buffer Struct.
+///
+/// # Errors
+/// Returns an error if the JSON value is not an object, as Protocol Buffer Struct
+/// representations require object types at the top level.
 fn json_to_struct(value: serde_json::Value) -> Result<prost_types::Struct> {
     match value {
         serde_json::Value::Object(map) => {
@@ -107,6 +140,13 @@ fn json_to_struct(value: serde_json::Value) -> Result<prost_types::Struct> {
     }
 }
 
+/// Converts a JSON value to a Protocol Buffer Value.
+///
+/// Handles all JSON types (null, bool, number, string, array, object) and maps
+/// them to their corresponding Protocol Buffer Value kinds.
+///
+/// # Errors
+/// Returns an error if a number value cannot be represented as an f64.
 fn json_to_value(value: serde_json::Value) -> Result<prost_types::Value> {
     let kind = match value {
         serde_json::Value::Null => prost_types::value::Kind::NullValue(0),
@@ -137,6 +177,7 @@ fn json_to_value(value: serde_json::Value) -> Result<prost_types::Value> {
     Ok(prost_types::Value { kind: Some(kind) })
 }
 
+/// Converts a Protocol Buffer Struct to a JSON value.
 fn struct_to_json(s: prost_types::Struct) -> serde_json::Value {
     let map = s
         .fields
@@ -146,6 +187,10 @@ fn struct_to_json(s: prost_types::Struct) -> serde_json::Value {
     serde_json::Value::Object(map)
 }
 
+/// Converts a Protocol Buffer Value to a JSON value.
+///
+/// Handles all Protocol Buffer Value kinds and maps them to their corresponding
+/// JSON types. Numbers that cannot be represented as JSON numbers are converted to null.
 fn prost_value_to_json(v: prost_types::Value) -> serde_json::Value {
     match v.kind {
         Some(prost_types::value::Kind::NullValue(_)) | None => serde_json::Value::Null,
@@ -161,6 +206,20 @@ fn prost_value_to_json(v: prost_types::Value) -> serde_json::Value {
     }
 }
 
+/// Loads and merges credentials from file and CLI arguments.
+///
+/// Credentials are loaded in two phases:
+/// 1. From the credentials file (defaults to ~/.config/operai/credentials.toml if not specified)
+/// 2. From CLI arguments, which override file credentials
+///
+/// Environment variable expansion is performed on values prefixed with "env:".
+///
+/// # Errors
+/// Returns an error if:
+/// - A credentials file is explicitly specified but not found
+/// - The credentials file cannot be read
+/// - The credentials file is not valid TOML
+/// - An environment variable reference cannot be resolved
 fn load_credentials(args: &CallArgs) -> Result<HashMap<String, HashMap<String, String>>> {
     let mut credentials: HashMap<String, HashMap<String, String>> = HashMap::new();
 
@@ -207,6 +266,14 @@ fn load_credentials(args: &CallArgs) -> Result<HashMap<String, HashMap<String, S
     Ok(credentials)
 }
 
+/// Processes a credential value, expanding environment variable references.
+///
+/// If the value starts with "env:", the rest of the string is treated as an
+/// environment variable name to look up. Otherwise, the value is returned as-is.
+///
+/// # Errors
+/// Returns an error if an environment variable reference is made but the
+/// variable is not set.
 fn process_value(value: &str) -> Result<String> {
     if let Some(var_name) = value.strip_prefix("env:") {
         std::env::var(var_name)
@@ -216,6 +283,24 @@ fn process_value(value: &str) -> Result<String> {
     }
 }
 
+/// Parses a credential string in the format "provider:key=value;key2=value2".
+///
+/// The provider name and keys are separated from values by '='. Multiple key-value
+/// pairs are separated by ';'. Special characters can be escaped with backslash.
+///
+/// # Grammar
+/// ```text
+/// credential_string ::= provider ':' key_value_pair (';' key_value_pair)*
+/// key_value_pair   ::= key '=' value
+/// ```
+///
+/// # Examples
+/// - `"github:token=123"` -> `("github", {"token": "123"})`
+/// - `"aws:key1=val1;key2=val2"` -> `("aws", {"key1": "val1", "key2": "val2"})`
+/// - `"provider:key=val\;ue"` -> `("provider", {"key": "val;ue"})`
+///
+/// # Errors
+/// Returns an error if the string does not contain a provider separator (':').
 fn parse_credential_string(s: &str) -> Result<(String, HashMap<String, String>)> {
     let (provider, rest) = s
         .split_once(':')

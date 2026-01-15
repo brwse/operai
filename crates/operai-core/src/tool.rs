@@ -1,4 +1,43 @@
-//! Tool registry for managing loaded tools.
+//! Tool registry and runtime for dynamically loaded tool libraries.
+//!
+//! This module provides the core infrastructure for managing tool lifecycles,
+//! including dynamic loading from shared libraries, invocation, and semantic
+//! search via embeddings.
+//!
+//! # Architecture
+//!
+//! The tool system is built around three main types:
+//!
+//! - [`ToolRegistry`]: Central registry managing all loaded tools
+//! - [`ToolHandle`]: Runtime handle for invoking a specific tool
+//! - [`ToolInfo`]: Immutable metadata describing a tool's capabilities
+//!
+//! # Tool Loading
+//!
+//! Tools are loaded from dynamic libraries (`.so`, `.dylib`, `.dll`) that
+//! implement the Operai ABI defined in `operai_abi`. Each library can export
+//! multiple tools, identified by qualified IDs like `crate-name.tool-name`.
+//!
+//! # Thread Safety
+//!
+//! ## Loading Phase (Not Thread-Safe)
+//!
+//! During tool loading, the registry requires exclusive mutable access:
+//! - [`ToolRegistry::load_library`] takes `&mut self` and cannot be called concurrently
+//! - Load all tools before wrapping the registry in [`Arc`] for concurrent access
+//!
+//! ## Execution Phase (Thread-Safe)
+//!
+//! Once tools are loaded and the registry is wrapped in [`Arc`]:
+//! - [`ToolRegistry::get`], [`ToolRegistry::list`], and [`ToolRegistry::search`] can be called concurrently
+//! - Tool handles are wrapped in [`Arc`] for safe sharing across threads
+//! - Tool invocations via [`ToolHandle::call`] may occur concurrently on different threads
+//! - The in-flight request counter uses atomic operations for thread-safe tracking
+//!
+//! # Semantic Search
+//!
+//! Tools can include embeddings for semantic search. The registry provides
+//! [`ToolRegistry::search`] to find tools by cosine similarity between embeddings.
 
 use std::{
     collections::HashMap,
@@ -19,61 +58,121 @@ use tracing::{info, instrument};
 
 use crate::loader::{LoadError, ToolLibrary};
 
-/// Errors that can occur when working with the registry.
+/// Errors that can occur during tool registry operations.
+///
+/// This enum represents failures during tool loading, registration, or invocation.
+/// It uses `#[non_exhaustive]` to allow adding new error variants without breaking
+/// existing code.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum RegistryError {
+    /// A tool with the given qualified ID was not found in the registry.
     #[error("tool not found: {0}")]
     NotFound(String),
 
+    /// Failed to load a tool library from disk.
     #[error("failed to load library: {0}")]
     LoadError(#[from] LoadError),
 
+    /// Attempted to register a tool with a qualified ID that already exists.
+    ///
+    /// Each tool must have a unique qualified ID (format: `crate-name.tool-name`).
     #[error("duplicate tool ID: {0}")]
     DuplicateId(String),
 
+    /// Tool invocation failed at runtime.
     #[error("tool invocation failed: {0}")]
     InvocationError(String),
 }
 
-/// Metadata about a registered tool.
+/// Immutable metadata describing a tool's interface and capabilities.
+///
+/// `ToolInfo` provides a complete description of a tool, including its schemas,
+/// capabilities, and optional semantic embedding for search. This information
+/// is extracted from the tool's ABI descriptor during registration.
+///
+/// # Fields
+///
+/// - `qualified_id`: Full identifier including crate name (e.g., `crate-name.tool-name`)
+/// - `tool_id`: Tool identifier within its crate (e.g., `tool-name`)
+/// - `crate_name`: Name of the crate/library providing this tool
+/// - `crate_version`: Version of the crate/library
+/// - `display_name`: Human-readable name for the tool
+/// - `description`: Detailed description of what the tool does
+/// - `input_schema`: JSON Schema describing valid inputs
+/// - `output_schema`: JSON Schema describing output format
+/// - `credential_schema`: Optional schema for required credentials
+/// - `capabilities`: List of capability identifiers (e.g., `["stream", "async"]`)
+/// - `tags`: Optional tags for categorization and search
+/// - `embedding`: Optional vector embedding for semantic search
 #[derive(Debug, Clone)]
 pub struct ToolInfo {
-    /// e.g., `"hello-world.greet"`
+    /// Full qualified identifier (format: `crate-name.tool-name`)
     pub qualified_id: String,
-    /// Tool ID within the crate, e.g., `"greet"`
+    /// Tool identifier within its crate
     pub tool_id: String,
-    /// e.g., `"hello-world"`
+    /// Name of the crate/library providing this tool
     pub crate_name: String,
+    /// Version of the crate/library
     pub crate_version: String,
+    /// Human-readable display name
     pub display_name: String,
+    /// Detailed description of the tool's purpose
     pub description: String,
+    /// JSON Schema for input validation
     pub input_schema: String,
+    /// JSON Schema describing output format
     pub output_schema: String,
+    /// Optional JSON Schema for required credentials
     pub credential_schema: Option<String>,
+    /// List of capability identifiers
     pub capabilities: Vec<String>,
+    /// Optional tags for categorization
     pub tags: Vec<String>,
-    /// Pre-computed embedding for semantic search.
+    /// Optional vector embedding for semantic search
     pub embedding: Option<Vec<f32>>,
 }
 
-/// Handle to a tool for invocation.
+/// Runtime handle for invoking a specific tool.
+///
+/// `ToolHandle` provides methods to invoke tools and query their metadata.
+/// Handles are typically accessed via [`Arc`] to enable concurrent use across
+/// multiple threads.
+///
+/// # Invocation
+///
+/// Use [`ToolHandle::call`] to invoke the tool with serialized input bytes.
+/// The call is asynchronous and returns an FFI-compatible future.
 pub struct ToolHandle {
+    /// Tool metadata and interface description
     info: ToolInfo,
+    /// Reference to the loaded tool module
     module: ToolModuleRef,
-    /// Serialized system credentials for this tool.
+    /// Serialized system credentials (rkyv-encoded)
     pub system_credentials: Vec<u8>,
-    /// Cached here to avoid repeated allocation when calling.
+    /// Tool identifier (unqualified)
     tool_id: String,
 }
 
 impl ToolHandle {
+    /// Returns a reference to this tool's metadata.
     #[must_use]
     pub fn info(&self) -> &ToolInfo {
         &self.info
     }
 
-    /// Invokes the tool, returning an FFI-safe future.
+    /// Invokes the tool with the provided input.
+    ///
+    /// This method is instrumented with tracing and logs the tool's qualified ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - Call context including session, user, and credential information
+    /// * `input` - Serialized input bytes (typically JSON)
+    ///
+    /// # Returns
+    ///
+    /// An FFI-compatible future that resolves to the tool's output or error.
     #[instrument(skip(self, context, input), fields(tool_id = %self.info.qualified_id))]
     pub fn call(&self, context: CallContext<'_>, input: RSlice<'_, u8>) -> FfiFuture<CallResult> {
         let args = CallArgs::new(context, RStr::from_str(&self.tool_id), input);
@@ -81,30 +180,121 @@ impl ToolHandle {
     }
 }
 
-/// Registry of loaded tools.
+/// Central registry for managing loaded tools and their lifecycles.
+///
+/// The `ToolRegistry` is responsible for:
+///
+/// - Loading tool libraries from dynamic libraries
+/// - Registering tools and validating ABI compatibility
+/// - Providing access to tools via qualified IDs
+/// - Tracking in-flight requests for graceful shutdown
+/// - Semantic search via tool embeddings
+///
+/// # Usage Pattern
+///
+/// The registry has two phases of operation:
+///
+/// ```ignore
+/// use operai_core::ToolRegistry;
+/// use std::sync::Arc;
+///
+/// // Phase 1: Loading (requires mutable access)
+/// let mut registry = ToolRegistry::new();
+/// # let ctx = operai_abi::RuntimeContext::new();
+/// registry.load_library("path/to/tool.so", Some("checksum"), None, &ctx).await?;
+///
+/// // Phase 2: Concurrent access (wrap in Arc)
+/// let registry = Arc::new(registry);
+/// # let policy_store = std::sync::Arc::new(operai_core::PolicyStore::new(std::sync::Arc::new(
+/// #     operai_core::InMemoryPolicySessionStore::new()
+/// # )));
+/// # use operai_runtime::LocalRuntime;
+/// let runtime = LocalRuntime::new(registry.clone(), policy_store);
+///
+/// // Now multiple threads can safely query and invoke tools
+/// let tool = registry.get("crate-name.tool-name").unwrap();
+/// ```
+///
+/// # Thread Safety
+///
+/// **Loading phase**: `load_library` requires `&mut self` and is not thread-safe.
+///
+/// **Execution phase**: Once wrapped in `Arc`, query operations (`get`, `list`, `search`)
+/// are thread-safe and can be called concurrently. Tool handles use interior `Arc`
+/// wrapping for safe concurrent invocation.
+///
+/// # Example
+///
+/// ```no_run
+/// # use operai_core::ToolRegistry;
+/// # use operai_abi::RuntimeContext;
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut registry = ToolRegistry::new();
+/// let runtime_ctx = RuntimeContext::default();
+///
+/// // Load a tool library
+/// registry.load_library(
+///     "./path/to/tool.so",
+///     Some("sha256-checksum"),
+///     None,
+///     &runtime_ctx
+/// ).await?;
+///
+/// // Get a tool handle
+/// let tool = registry.get("crate-name.tool-name")
+///     .expect("tool not found");
+///
+/// // List all tools
+/// for info in registry.list() {
+///     println!("{}: {}", info.display_name, info.description);
+/// }
+/// # Ok(())
+/// # }
+/// ```
 pub struct ToolRegistry {
-    /// Kept alive to prevent dynamic libraries from unloading.
+    /// Loaded tool libraries (kept for lifetime management)
     libraries: Vec<ToolLibrary>,
+    /// Map from qualified ID to tool handle
     tools: HashMap<String, Arc<ToolHandle>>,
-    /// `(qualified_id, embedding)` pairs for semantic search.
+    /// Tool embeddings for semantic search (qualified_id, embedding)
     embeddings: Vec<(String, Vec<f32>)>,
-    /// Tracks in-flight requests for graceful shutdown.
+    /// Counter for tracking in-flight requests
     inflight: AtomicU64,
 }
 
-/// RAII guard that decrements the registry's in-flight request counter on drop.
+/// RAII guard for tracking in-flight tool requests.
+///
+/// When created, this guard increments the registry's in-flight counter.
+/// When dropped, it automatically decrements the counter. This is useful for
+/// ensuring accurate request tracking even when errors occur.
+///
+/// # Example
+///
+/// ```no_run
+/// # use operai_core::ToolRegistry;
+/// let registry = ToolRegistry::new();
+///
+/// {
+///     let _guard = registry.start_request_guard();
+///     // Do work that might fail or panic
+///     // Guard ensures counter is decremented when scope exits
+/// } // Guard dropped here, counter decremented
+/// ```
 #[must_use = "if unused, the in-flight request will be immediately ended"]
 pub struct InflightRequestGuard<'a> {
     registry: &'a ToolRegistry,
 }
 
 impl Drop for InflightRequestGuard<'_> {
+    /// Decrements the registry's in-flight counter when the guard is dropped.
     fn drop(&mut self) {
         self.registry.end_request();
     }
 }
 
 impl ToolRegistry {
+    /// Creates a new, empty tool registry.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -115,15 +305,28 @@ impl ToolRegistry {
         }
     }
 
-    /// Loads a tool library and registers all its tools.
+    /// Loads a tool library from a dynamic library file and registers all its tools.
+    ///
+    /// This method validates the library's checksum (if provided), loads it from disk,
+    /// initializes the module, and registers all exported tools.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the dynamic library (`.so`, `.dylib`, or `.dll`)
+    /// * `checksum` - Optional SHA-256 checksum for validation
+    /// * `credentials` - Optional system credentials to pass to tools
+    /// * `runtime_ctx` - Runtime context for initialization
     ///
     /// # Errors
     ///
-    /// Returns an error if loading fails or a duplicate tool ID is found.
+    /// Returns [`RegistryError::LoadError`] if:
+    /// - The library file cannot be loaded
+    /// - The checksum doesn't match
+    /// - The library's ABI version is incompatible
+    /// - Initialization fails
     ///
-    /// # Panics
-    ///
-    /// Panics if serialization of empty credentials fails.
+    /// Returns [`RegistryError::DuplicateId`] if any tool in the library
+    /// has a qualified ID that's already registered.
     pub async fn load_library(
         &mut self,
         path: impl AsRef<std::path::Path>,
@@ -140,15 +343,24 @@ impl ToolRegistry {
         Ok(())
     }
 
-    /// Registers a statically linked tool module.
+    /// Registers a pre-loaded tool module reference.
     ///
-    /// The caller must ensure the module remains valid for the lifetime of the
-    /// registry.
+    /// This is useful for testing or when you have a module reference that wasn't
+    /// loaded from a file. The method validates ABI version and initializes the module.
+    ///
+    /// # Arguments
+    ///
+    /// * `module` - FFI-compatible reference to the tool module
+    /// * `credentials` - Optional system credentials to pass to tools
+    /// * `runtime_ctx` - Runtime context for initialization
     ///
     /// # Errors
     ///
-    /// Returns an error if the ABI version is incompatible, initialization
-    /// fails, or any tool ID is duplicated.
+    /// Returns [`RegistryError::LoadError`] if:
+    /// - The ABI version doesn't match
+    /// - Module initialization fails
+    ///
+    /// Returns [`RegistryError::DuplicateId`] if any tool ID conflicts.
     pub async fn register_module(
         &mut self,
         module: ToolModuleRef,
@@ -172,6 +384,20 @@ impl ToolRegistry {
         self.register_module_ref(module, credentials)
     }
 
+    /// Internal method to register tools from a module reference.
+    ///
+    /// This method extracts tool descriptors from the module, creates tool handles,
+    /// and adds them to the registry. It also builds the embedding index for search.
+    ///
+    /// # Arguments
+    ///
+    /// * `module` - FFI-compatible reference to the tool module
+    /// * `credentials` - Optional system credentials (rkyv-encoded and stored in each handle)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError::DuplicateId`] if any qualified tool ID conflicts
+    /// with an already-registered tool.
     fn register_module_ref(
         &mut self,
         module: ToolModuleRef,
@@ -258,27 +484,74 @@ impl ToolRegistry {
         Ok(())
     }
 
+    /// Gets a tool handle by its qualified ID.
+    ///
+    /// Returns `None` if the tool is not registered.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use operai_core::ToolRegistry;
+    /// let registry = ToolRegistry::new();
+    ///
+    /// if let Some(tool) = registry.get("my-crate.my-tool") {
+    ///     println!("Found tool: {}", tool.info().display_name);
+    /// }
+    /// ```
     #[must_use]
     pub fn get(&self, qualified_id: &str) -> Option<Arc<ToolHandle>> {
         self.tools.get(qualified_id).cloned()
     }
 
+    /// Returns an iterator over all registered tools' metadata.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use operai_core::ToolRegistry;
+    /// let registry = ToolRegistry::new();
+    ///
+    /// for info in registry.list() {
+    ///     println!("{}: {}", info.qualified_id, info.description);
+    /// }
+    /// ```
     pub fn list(&self) -> impl Iterator<Item = &ToolInfo> {
         self.tools.values().map(|h| &h.info)
     }
 
+    /// Returns the number of registered tools.
     #[must_use]
     pub fn len(&self) -> usize {
         self.tools.len()
     }
 
+    /// Returns `true` if no tools are registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
     }
 
-    /// Searches tools by semantic similarity, returning results sorted by score
-    /// (highest first).
+    /// Searches for tools by semantic similarity using embeddings.
+    ///
+    /// This method computes cosine similarity between the query embedding and
+    /// each tool's embedding, returning the top `limit` results sorted by
+    /// descending similarity score.
+    ///
+    /// # Arguments
+    ///
+    /// * `query_embedding` - Vector embedding of the query (typically from an embedding model)
+    /// * `limit` - Maximum number of results to return
+    ///
+    /// # Returns
+    ///
+    /// A vector of `(ToolInfo, score)` tuples, where `score` is the cosine similarity
+    /// in the range `[-1.0, 1.0]`. Higher values indicate greater similarity.
+    ///
+    /// # Notes
+    ///
+    /// - Tools without embeddings are not included in results
+    /// - Returns an empty vector if `query_embedding` is empty
+    /// - Results are sorted by descending similarity score
     #[must_use]
     pub fn search(&self, query_embedding: &[f32], limit: usize) -> Vec<(&ToolInfo, f32)> {
         if query_embedding.is_empty() {
@@ -301,19 +574,39 @@ impl ToolRegistry {
     }
 
     /// Increments the in-flight request counter.
+    ///
+    /// This should be called when a tool invocation starts. Remember to call
+    /// [`Self::end_request`] when the invocation completes, or use
+    /// [`Self::start_request_guard`] for automatic cleanup.
     pub fn start_request(&self) {
         self.inflight.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Starts a request and returns a guard that decrements the counter on
-    /// drop.
+    /// Creates a guard that tracks an in-flight request.
+    ///
+    /// The guard increments the counter on creation and automatically decrements
+    /// it when dropped. This is safer than manually calling [`Self::start_request`]
+    /// and [`Self::end_request`].
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use operai_core::ToolRegistry;
+    /// let registry = ToolRegistry::new();
+    /// let _guard = registry.start_request_guard();
+    /// // Do work here - counter will be decremented when guard is dropped
+    /// ```
     #[must_use = "dropping the guard immediately will end the request"]
     pub fn start_request_guard(&self) -> InflightRequestGuard<'_> {
         self.start_request();
         InflightRequestGuard { registry: self }
     }
 
-    /// Decrements the in-flight request counter, saturating at zero.
+    /// Decrements the in-flight request counter.
+    ///
+    /// Uses saturating subtraction to prevent underflow. If you need to call this
+    /// manually, consider using [`Self::start_request_guard`] instead for RAII-style
+    /// cleanup.
     pub fn end_request(&self) {
         let _ = self
             .inflight
@@ -328,7 +621,23 @@ impl ToolRegistry {
         self.inflight.load(Ordering::Relaxed)
     }
 
-    /// Waits for all in-flight requests to complete before shutdown.
+    /// Waits for all in-flight requests to complete.
+    ///
+    /// This method polls the in-flight counter every 10ms until it reaches zero.
+    /// It's useful for ensuring all tool invocations have finished before shutting
+    /// down the registry.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use operai_core::ToolRegistry;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let registry = ToolRegistry::new();
+    /// // ... do work that spawns tool invocations
+    /// registry.drain().await; // Wait for all to complete
+    /// # }
+    /// ```
     pub async fn drain(&self) {
         while self.inflight_count() > 0 {
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
@@ -337,11 +646,27 @@ impl ToolRegistry {
 }
 
 impl Default for ToolRegistry {
+    /// Creates a new empty registry, same as [`ToolRegistry::new`].
     fn default() -> Self {
         Self::new()
     }
 }
 
+/// Computes cosine similarity between two vectors.
+///
+/// Returns a value in the range `[-1.0, 1.0]` where:
+/// - `1.0` indicates identical direction (maximum similarity)
+/// - `0.0` indicates orthogonal (no similarity)
+/// - `-1.0` indicates opposite direction (maximum dissimilarity)
+///
+/// # Arguments
+///
+/// * `a` - First vector
+/// * `b` - Second vector
+///
+/// # Returns
+///
+/// Cosine similarity, or `0.0` if vectors have different lengths or are empty.
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
@@ -367,6 +692,15 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    /// Unit tests for the tool registry and related functionality.
+    ///
+    /// These tests cover:
+    /// - Cosine similarity calculations
+    /// - Registry operations (load, register, get, list)
+    /// - In-flight request tracking
+    /// - Tool invocation
+    /// - Semantic search
+    /// - Error conditions
     use abi_stable::{
         prefix_type::{PrefixRefTrait, WithMetadata},
         std_types::RVec,
@@ -375,10 +709,12 @@ mod tests {
 
     use super::*;
 
+    /// Test helper: Creates a mock tool init function that always succeeds.
     extern "C" fn test_tool_init(_args: InitArgs) -> FfiFuture<ToolResult> {
         FfiFuture::new(async { ToolResult::Ok })
     }
 
+    /// Test helper: Creates a mock tool call function that echoes the tool ID and input.
     extern "C" fn test_tool_call(args: CallArgs<'_>) -> FfiFuture<CallResult> {
         let tool_id = args.tool_id.as_str().to_string();
         let input = args.input.as_slice().to_vec();
@@ -391,8 +727,10 @@ mod tests {
         })
     }
 
+    /// Test helper: Creates a mock tool shutdown function.
     extern "C" fn test_tool_shutdown() {}
 
+    /// Test helper: Creates a mock tool module reference for testing.
     fn test_tool_module_ref() -> ToolModuleRef {
         let module = ToolModule {
             meta: operai_abi::ToolMeta::new(
@@ -411,6 +749,7 @@ mod tests {
         ToolModuleRef::from_prefix_ref(with_metadata.static_as_prefix())
     }
 
+    /// Test helper: Creates a mock `ToolInfo` for testing.
     fn test_tool_info(qualified_id: &str, tool_id: &str, embedding: Option<Vec<f32>>) -> ToolInfo {
         let (crate_name, _) = qualified_id
             .split_once('.')
@@ -432,6 +771,7 @@ mod tests {
         }
     }
 
+    /// Test helper: Inserts a test tool into the registry.
     fn insert_test_tool(registry: &mut ToolRegistry, info: ToolInfo) {
         let qualified_id = info.qualified_id.clone();
         if let Some(ref embedding) = info.embedding {

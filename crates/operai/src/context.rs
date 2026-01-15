@@ -1,4 +1,24 @@
-//! Context for tool invocations.
+//! Request context and credential management for tool invocations.
+//!
+//! This module provides the [`Context`] struct, which encapsulates metadata and credentials
+//! for a single tool invocation. It converts between the FFI-compatible [`CallContext`] from
+//! `operai_abi` and a more ergonomic Rust API.
+//!
+//! # Credentials
+//!
+//! Credentials are organized into two separate namespaces:
+//!
+//! - **System credentials**: Provider-level credentials configured by the operator
+//! - **User credentials**: User-specific credentials for authentication
+//!
+//! Both namespaces are independent, allowing the same credential name to exist in both
+//! with different values.
+//!
+//! # Deserialization
+//!
+//! Credentials are stored as `HashMap<String, String>` and can be deserialized into any
+//! type that implements `DeserializeOwned`. The deserialization uses JSON as an intermediate
+//! format, converting the HashMap to a JSON object and then to the target type.
 
 use std::collections::HashMap;
 
@@ -8,10 +28,10 @@ use serde::de::DeserializeOwned;
 
 use crate::credential::CredentialError;
 
-/// Provides access to request metadata and credentials during tool invocation.
+/// Execution context for a tool invocation.
 ///
-/// System credentials come from environment variables and persist across
-/// invocations. User credentials are per-request and passed via gRPC.
+/// Contains metadata (request, session, and user IDs) and credential stores for
+/// accessing system and user credentials during tool execution.
 #[derive(Debug, Clone)]
 pub struct Context {
     request_id: String,
@@ -22,10 +42,17 @@ pub struct Context {
 }
 
 impl Context {
-    /// Creates a new context from an FFI `CallContext`.
+    /// Creates a `Context` from an FFI [`CallContext`].
     ///
-    /// This is only intended for use by the `generate_tool_entrypoint!` macro.
-    #[doc(hidden)]
+    /// This is an internal method used by the runtime to convert the FFI-compatible
+    /// context into the high-level Rust API. It deserializes credentials from
+    /// rkyv-encoded binary format.
+    ///
+    /// # Errors
+    ///
+    /// This function uses `unwrap_or_default()` for credential deserialization,
+    /// meaning malformed credential data will result in empty credential stores
+    /// rather than a panic.
     #[must_use]
     pub fn __from_call_context(call_ctx: &CallContext<'_>) -> Self {
         let request_id = call_ctx.request_id.to_string();
@@ -57,7 +84,11 @@ impl Context {
         }
     }
 
-    /// Creates an empty context useful for testing.
+    /// Creates an empty context with no metadata or credentials.
+    ///
+    /// Useful for testing or as a starting point for builder-style construction
+    /// using [`with_system_credential`](Self::with_system_credential) and
+    /// [`with_user_credential`](Self::with_user_credential).
     #[must_use]
     pub fn empty() -> Self {
         Self {
@@ -69,7 +100,7 @@ impl Context {
         }
     }
 
-    /// Creates a context with the specified metadata, useful for testing.
+    /// Creates a context with the specified metadata but no credentials.
     #[must_use]
     pub fn with_metadata(request_id: &str, session_id: &str, user_id: &str) -> Self {
         Self {
@@ -81,42 +112,50 @@ impl Context {
         }
     }
 
-    /// Server-generated UUID for correlating logs across components.
+    /// Returns the request ID for this invocation.
     #[must_use]
     pub fn request_id(&self) -> &str {
         &self.request_id
     }
 
-    /// Optional client-provided identifier for stateful tool interactions.
+    /// Returns the session ID for this invocation.
     #[must_use]
     pub fn session_id(&self) -> &str {
         &self.session_id
     }
 
-    /// The authenticated user's ID from the OIDC token.
+    /// Returns the user ID for this invocation.
     #[must_use]
     pub fn user_id(&self) -> &str {
         &self.user_id
     }
 
-    /// Retrieves a system credential by name, deserializing into the requested
-    /// type.
+    /// Retrieves and deserializes a system credential.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The target type to deserialize the credential into. Must implement
+    ///        `DeserializeOwned`.
     ///
     /// # Errors
     ///
-    /// Returns [`CredentialError::NotFound`] if the credential doesn't exist,
-    /// or [`CredentialError::DeserializationError`] if deserialization fails.
+    /// Returns [`CredentialError::NotFound`] if the credential doesn't exist, or
+    /// [`CredentialError::DeserializationError`] if deserialization fails.
     pub fn system_credential<T: DeserializeOwned>(&self, name: &str) -> Result<T, CredentialError> {
         Self::get_credential(&self.system_credentials, name)
     }
 
-    /// Retrieves a user credential by name, deserializing into the requested
-    /// type.
+    /// Retrieves and deserializes a user credential.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The target type to deserialize the credential into. Must implement
+    ///        `DeserializeOwned`.
     ///
     /// # Errors
     ///
-    /// Returns [`CredentialError::NotFound`] if the credential doesn't exist,
-    /// or [`CredentialError::DeserializationError`] if deserialization fails.
+    /// Returns [`CredentialError::NotFound`] if the credential doesn't exist, or
+    /// [`CredentialError::DeserializationError`] if deserialization fails.
     pub fn user_credential<T: DeserializeOwned>(&self, name: &str) -> Result<T, CredentialError> {
         Self::get_credential(&self.user_credentials, name)
     }
@@ -134,14 +173,18 @@ impl Context {
             .map_err(|e| CredentialError::DeserializationError(e.to_string()))
     }
 
-    /// Adds a system credential for testing.
+    /// Builder method: adds a system credential to this context.
+    ///
+    /// Consumes `self` and returns the modified context, enabling chained calls.
     #[must_use]
     pub fn with_system_credential(mut self, name: &str, values: HashMap<String, String>) -> Self {
         self.system_credentials.insert(name.to_string(), values);
         self
     }
 
-    /// Adds a user credential for testing.
+    /// Builder method: adds a user credential to this context.
+    ///
+    /// Consumes `self` and returns the modified context, enabling chained calls.
     #[must_use]
     pub fn with_user_credential(mut self, name: &str, values: HashMap<String, String>) -> Self {
         self.user_credentials.insert(name.to_string(), values);

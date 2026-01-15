@@ -1,3 +1,22 @@
+//! gRPC server implementation for the Toolbox service.
+//!
+//! This module provides a tonic-based gRPC server that exposes the Tool Runtime
+//! functionality over the network. It implements the `Toolbox` service trait,
+//! allowing clients to list, search, and call tools remotely.
+//!
+//! # Metadata Extraction
+//!
+//! The service extracts metadata from gRPC request headers:
+//! - `x-request-id`: Request identifier for tracing
+//! - `x-session-id`: Session identifier for policy evaluation
+//! - `x-user-id`: User identifier for authorization
+//! - `x-credential-*`: Base64-encoded JSON credentials for external services
+//!
+//! # Credentials Format
+//!
+//! Credential headers use the format `x-credential-{provider}` where the value
+//! is a base64-encoded JSON object with a `values` field containing key-value pairs.
+
 use std::{collections::HashMap, sync::Arc};
 
 use base64::prelude::*;
@@ -13,26 +32,56 @@ use crate::{
     runtime::{CallMetadata, LocalRuntime},
 };
 
+/// gRPC service implementation for the Toolbox API.
+///
+/// This service wraps a [`LocalRuntime`] and exposes it via the gRPC `Toolbox` protocol.
+/// It handles metadata extraction from request headers and credential parsing.
+///
+/// # Fields
+///
+/// * `runtime` - The underlying local runtime that executes tool calls
 pub struct ToolboxService {
     runtime: LocalRuntime,
 }
 
 impl ToolboxService {
+    /// Creates a new `ToolboxService` with the given tool registry and policy store.
+    ///
+    /// # Arguments
+    ///
+    /// * `registry` - The tool registry containing available tools
+    /// * `policy_store` - The policy store for authorization and evaluation
     #[must_use]
     pub fn new(registry: Arc<ToolRegistry>, policy_store: Arc<PolicyStore>) -> Self {
         Self::from_runtime(LocalRuntime::new(registry, policy_store))
     }
 
+    /// Creates a new `ToolboxService` from an existing `LocalRuntime`.
+    ///
+    /// # Arguments
+    ///
+    /// * `runtime` - A configured local runtime instance
     #[must_use]
     pub fn from_runtime(runtime: LocalRuntime) -> Self {
         Self { runtime }
     }
 
+    /// Returns a reference to the underlying runtime.
     #[must_use]
     pub fn runtime(&self) -> &LocalRuntime {
         &self.runtime
     }
 
+    /// Extracts metadata headers from a gRPC request.
+    ///
+    /// Returns a tuple of `(request_id, session_id, user_id)`. Missing headers
+    /// are returned as empty strings.
+    ///
+    /// # Headers Extracted
+    ///
+    /// - `x-request-id`: Unique request identifier
+    /// - `x-session-id`: Session identifier for policy evaluation
+    /// - `x-user-id`: User identifier for authorization
     fn extract_metadata<T>(request: &Request<T>) -> (String, String, String) {
         let get = |key| {
             request
@@ -45,7 +94,26 @@ impl ToolboxService {
         (get("x-request-id"), get("x-session-id"), get("x-user-id"))
     }
 
-    /// Parses `x-credential-{name}` headers containing base64-encoded JSON.
+    /// Extracts user credentials from gRPC request metadata headers.
+    ///
+    /// Credentials are passed via headers with the format `x-credential-{provider}`.
+    /// Each header value must be a base64-encoded JSON object containing a `values` field.
+    ///
+    /// # Example Header
+    ///
+    /// ```text
+    /// x-credential-github: eyJ2YWx1ZXMiOnt0b2tlbiI6ImFiYyIsIm9yZyI6ImJyd3NlIn19
+    /// ```
+    ///
+    /// Which decodes to:
+    /// ```json
+    /// {"values":{"token":"abc","org":"brwse"}}
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// A map of provider name to credential values. Invalid or malformed credential
+    /// headers are silently ignored (logged as warnings).
     fn extract_credentials<T>(request: &Request<T>) -> HashMap<String, HashMap<String, String>> {
         #[derive(serde::Deserialize)]
         struct CredentialData {
@@ -76,8 +144,18 @@ impl ToolboxService {
     }
 }
 
+/// gRPC service implementation for the Toolbox protocol.
+///
+/// This trait implementation handles the three main operations:
+/// - Listing available tools with pagination
+/// - Searching tools by semantic similarity
+/// - Calling tools with input validation and policy enforcement
 #[tonic::async_trait]
 impl Toolbox for ToolboxService {
+    /// Lists all available tools in the registry.
+    ///
+    /// Supports pagination via `page_size` and `page_token` parameters.
+    /// Returns tools in a deterministic order with a `next_page_token` for pagination.
     #[instrument(skip(self, request), fields(page_size, page_token))]
     async fn list_tools(
         &self,
@@ -87,6 +165,10 @@ impl Toolbox for ToolboxService {
         Ok(Response::new(response))
     }
 
+    /// Searches for tools by semantic similarity using an embedding vector.
+    ///
+    /// The `query_embedding` must match the dimensionality of tool embeddings
+    /// in the registry. Returns tools ranked by cosine similarity.
     #[instrument(skip(self, request), fields(embedding_dims))]
     async fn search_tools(
         &self,
@@ -96,6 +178,19 @@ impl Toolbox for ToolboxService {
         Ok(Response::new(response))
     }
 
+    /// Invokes a tool with the provided input and metadata.
+    ///
+    /// This method:
+    /// 1. Extracts request metadata (request_id, session_id, user_id)
+    /// 2. Parses user credentials from headers
+    /// 3. Validates the tool name format
+    /// 4. Enforces pre-call policy evaluation
+    /// 5. Executes the tool with the provided input
+    /// 6. Enforces post-call policy evaluation
+    /// 7. Returns the tool output or error
+    ///
+    /// Tool execution errors are returned in the response rather than as gRPC errors,
+    /// allowing the transport to succeed even when tool execution fails.
     #[instrument(skip(self, request), fields(tool_name))]
     async fn call_tool(
         &self,
@@ -121,6 +216,11 @@ impl Toolbox for ToolboxService {
 
 #[cfg(test)]
 mod tests {
+    //! Integration tests for the gRPC transport layer.
+    //!
+    //! These tests build a sample tool library (hello-world) and verify the
+    //! gRPC service implementation correctly handles all operations.
+
     use std::{
         collections::{HashMap, HashSet},
         path::{Path, PathBuf},
@@ -140,14 +240,17 @@ mod tests {
         },
     };
 
+    /// Cached path to the hello-world cdylib for testing.
     static HELLO_WORLD_CDYLIB_PATH: OnceLock<PathBuf> = OnceLock::new();
 
+    /// Returns the workspace root directory.
     fn workspace_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
     }
 
+    /// Returns the target directory and profile name from the test executable path.
     fn cargo_target_dir_and_profile() -> (PathBuf, String) {
         let exe_path = std::env::current_exe().expect("test executable path should be available");
         let deps_dir = exe_path
@@ -167,6 +270,7 @@ mod tests {
         (target_dir.to_path_buf(), profile)
     }
 
+    /// Returns the platform-specific filename for the hello-world cdylib.
     fn expected_hello_world_cdylib_file_name() -> String {
         format!(
             "{}hello_world{}",
@@ -175,6 +279,9 @@ mod tests {
         )
     }
 
+    /// Searches for the hello-world cdylib in the target directory.
+    ///
+    /// Looks in both the profile directory directly and in the deps subdirectory.
     fn find_hello_world_cdylib(target_dir: &Path, profile: &str) -> Option<PathBuf> {
         let file_name = expected_hello_world_cdylib_file_name();
         let profile_dir = target_dir.join(profile);
@@ -197,6 +304,7 @@ mod tests {
         None
     }
 
+    /// Builds the hello-world cdylib using cargo.
     fn build_hello_world_cdylib(target_dir: &Path, profile: &str) {
         let mut cmd = Command::new("cargo");
         cmd.current_dir(workspace_root());
@@ -210,6 +318,7 @@ mod tests {
         assert!(status.success(), "cargo build -p hello-world failed");
     }
 
+    /// Returns the path to the hello-world cdylib, building it if necessary.
     fn hello_world_cdylib_path() -> PathBuf {
         HELLO_WORLD_CDYLIB_PATH
             .get_or_init(|| {
@@ -227,6 +336,7 @@ mod tests {
             .clone()
     }
 
+    /// Creates a test service with the hello-world tools loaded.
     async fn service_with_hello_world_registry() -> (ToolboxService, Arc<ToolRegistry>) {
         let lib_path = hello_world_cdylib_path();
 
@@ -249,12 +359,14 @@ mod tests {
         )
     }
 
+    /// Creates a protobuf string value for test assertions.
     fn make_string_value(s: &str) -> prost_types::Value {
         prost_types::Value {
             kind: Some(prost_types::value::Kind::StringValue(s.to_string())),
         }
     }
 
+    /// Helper to get a field from a protobuf Struct for test assertions.
     fn output_struct_field<'a>(
         output: &'a prost_types::Struct,
         field: &str,
@@ -265,6 +377,7 @@ mod tests {
             .unwrap_or_else(|| panic!("missing output field `{field}`"))
     }
 
+    /// Helper to extract a string field from a protobuf Struct for test assertions.
     fn output_string(output: &prost_types::Struct, field: &str) -> String {
         match &output_struct_field(output, field).kind {
             Some(prost_types::value::Kind::StringValue(s)) => s.clone(),
@@ -272,6 +385,7 @@ mod tests {
         }
     }
 
+    /// Helper to extract a number field from a protobuf Struct for test assertions.
     fn output_number(output: &prost_types::Struct, field: &str) -> f64 {
         match &output_struct_field(output, field).kind {
             Some(prost_types::value::Kind::NumberValue(n)) => *n,

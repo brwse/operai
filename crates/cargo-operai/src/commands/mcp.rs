@@ -1,4 +1,14 @@
-//! `cargo operai mcp` command implementation.
+//! MCP (Model Context Protocol) server command implementation.
+//!
+//! This module provides the `mcp` subcommand which runs an MCP server that exposes
+//! operai tools to MCP clients (such as Claude Desktop or other AI assistants).
+//! The server can run in two modes:
+//!
+//! - **HTTP mode**: Exposes tools via a streaming HTTP endpoint on a configurable address/path
+//! - **stdio mode**: Communicates via standard input/output for direct client integration
+//!
+//! The server supports optional semantic search capabilities when `--searchable` is enabled,
+//! allowing clients to discover tools using natural language queries.
 
 use std::{future::Future, net::SocketAddr, path::PathBuf};
 
@@ -14,30 +24,41 @@ use rmcp::{
 use tokio::signal;
 use tracing::info;
 
-/// Arguments for the `mcp` command.
+/// Command-line arguments for the MCP server subcommand.
 #[derive(Args)]
 pub struct McpArgs {
-    /// Path to tools.toml manifest file.
+    /// Path to the operai manifest file (defaults to `operai.toml`).
     #[arg(short, long)]
     pub manifest: Option<PathBuf>,
 
-    /// Address to bind the MCP server to.
+    /// Address to bind the HTTP server to (defaults to `127.0.0.1:3333`).
     #[arg(short = 'a', long, default_value = "127.0.0.1:3333")]
     pub addr: String,
 
-    /// HTTP path for MCP streamable transport.
+    /// HTTP path for the MCP endpoint (defaults to `/mcp`).
     #[arg(long, default_value = "/mcp")]
     pub path: String,
 
-    /// Enable searchable mode (exposes list/find/call tools only).
+    /// Enable semantic search mode for tool discovery.
+    ///
+    /// When enabled, the server exposes a reduced set of search tools
+    /// (`list_tool`, `find_tool`, `call_tool`) instead of exposing all
+    /// registered tools directly.
     #[arg(long, default_value_t = false)]
     pub searchable: bool,
 
-    /// Serve MCP over stdio instead of HTTP.
+    /// Run in stdio mode instead of HTTP mode.
+    ///
+    /// In stdio mode, the server communicates via standard input/output,
+    /// which is useful for direct integration with MCP clients.
     #[arg(long, default_value_t = false)]
     pub stdio: bool,
 }
 
+/// Runs the MCP server with the given configuration.
+///
+/// This function sets up a Ctrl+C signal handler and starts the server.
+/// The server mode (HTTP or stdio) is determined by the `stdio` flag in `args`.
 pub async fn run(args: &McpArgs) -> Result<()> {
     let shutdown = async {
         let _ = signal::ctrl_c().await;
@@ -46,6 +67,30 @@ pub async fn run(args: &McpArgs) -> Result<()> {
     run_with_shutdown(args, shutdown).await
 }
 
+/// Runs the MCP server with a custom shutdown future.
+///
+/// # Arguments
+///
+/// * `args` - Configuration for the MCP server
+/// * `shutdown` - A future that completes when the server should shut down
+///
+/// # Behavior
+///
+/// This function:
+/// 1. Loads the operai runtime from the manifest
+/// 2. Optionally initializes a search embedder if `--searchable` is enabled
+/// 3. Either starts an HTTP server or stdio server based on the `stdio` flag
+/// 4. Waits for the shutdown signal
+/// 5. Drains in-flight requests before returning
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The manifest file cannot be loaded
+/// - The runtime fails to initialize
+/// - The search embedder fails to initialize (when `--searchable` is enabled)
+/// - The server fails to bind to the specified address
+/// - The server encounters an error during operation
 async fn run_with_shutdown<F>(args: &McpArgs, shutdown: F) -> Result<()>
 where
     F: Future<Output = ()> + Send + 'static,
@@ -122,11 +167,17 @@ where
     Ok(())
 }
 
+/// Wrapper that adapts [`EmbeddingGenerator`] to the [`SearchEmbedder`] trait.
+///
+/// This struct provides thread-safe access to an embedding generator,
+/// allowing it to be used concurrently by multiple search requests.
 struct CliSearchEmbedder {
+    /// The underlying embedding generator, protected by a mutex for async-safe access.
     generator: tokio::sync::Mutex<EmbeddingGenerator>,
 }
 
 impl CliSearchEmbedder {
+    /// Creates a new CLI search embedder from an embedding generator.
     fn new(generator: EmbeddingGenerator) -> Self {
         Self {
             generator: tokio::sync::Mutex::new(generator),
@@ -135,6 +186,10 @@ impl CliSearchEmbedder {
 }
 
 impl SearchEmbedder for CliSearchEmbedder {
+    /// Generates an embedding vector for the given query text.
+    ///
+    /// This implementation clones the query string and acquires an async lock
+    /// on the underlying generator to ensure thread-safe access.
     fn embed_query(&self, query: &str) -> SearchEmbedFuture<'_> {
         let query = query.to_string();
         let generator = &self.generator;
@@ -145,11 +200,43 @@ impl SearchEmbedder for CliSearchEmbedder {
     }
 }
 
+/// Builds a search embedder using default configuration.
+///
+/// This function creates an [`EmbeddingGenerator`] from the default config
+/// (which reads from environment variables or config files) and wraps it
+/// in a [`CliSearchEmbedder`] for use with the MCP service.
+///
+/// # Errors
+///
+/// Returns an error if the embedding generator fails to initialize from config.
 fn build_search_embedder() -> Result<std::sync::Arc<dyn SearchEmbedder>> {
     let generator = EmbeddingGenerator::from_config(None, None)?;
     Ok(std::sync::Arc::new(CliSearchEmbedder::new(generator)))
 }
 
+/// Runs the MCP server in stdio mode.
+///
+/// In stdio mode, the server communicates via standard input/output using the
+/// MCP stdio transport protocol. This is the standard mode for desktop-based
+/// MCP clients (like Claude Desktop).
+///
+/// # Arguments
+///
+/// * `runtime` - The operai runtime containing registered tools
+/// * `searchable` - Whether to enable search mode (exposes search tools instead of all tools)
+/// * `search_embedder` - Optional embedder for semantic search (required if `searchable` is true)
+///
+/// # Behavior
+///
+/// The server will:
+/// 1. Print startup messages to stderr
+/// 2. Serve MCP requests via stdin/stdout
+/// 3. Listen for Ctrl+C to initiate graceful shutdown
+/// 4. Drain in-flight requests before exiting
+///
+/// # Errors
+///
+/// Returns an error if the stdio server fails to start or encounters a fatal error.
 async fn run_stdio(
     runtime: operai_runtime::LocalRuntime,
     searchable: bool,
@@ -195,6 +282,25 @@ async fn run_stdio(
     Ok(())
 }
 
+/// Normalizes an HTTP path to ensure it starts with `/`.
+///
+/// # Arguments
+///
+/// * `path` - The path string to normalize
+///
+/// # Returns
+///
+/// - If `path` is empty, returns `"/mcp"` (the default)
+/// - If `path` already starts with `/`, returns it unchanged
+/// - Otherwise, prepends `/` to the path
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(normalize_path(""), "/mcp");
+/// assert_eq!(normalize_path("/custom"), "/custom");
+/// assert_eq!(normalize_path("custom"), "/custom");
+/// ```
 fn normalize_path(path: &str) -> String {
     if path.is_empty() {
         "/mcp".to_string()
@@ -211,12 +317,14 @@ mod tests {
 
     use super::*;
 
+    /// Helper wrapper type for parsing [`McpArgs`] with clap.
     #[derive(Parser)]
     struct McpArgsCli {
         #[command(flatten)]
         mcp: McpArgs,
     }
 
+    /// Verifies that [`McpArgs`] uses expected default values when no flags are provided.
     #[test]
     fn test_mcp_args_defaults() {
         let cli = McpArgsCli::try_parse_from(["test"]).expect("args should parse");
@@ -227,6 +335,7 @@ mod tests {
         assert_eq!(cli.mcp.manifest, None);
     }
 
+    /// Verifies that [`McpArgs`] correctly parses all supported flags.
     #[test]
     fn test_mcp_args_parse_flags() {
         let cli = McpArgsCli::try_parse_from([

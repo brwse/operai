@@ -1,4 +1,18 @@
-//! `cargo operai build` command implementation.
+//! Build command for Operai tools.
+//!
+//! This module implements the `cargo operai build` command, which:
+//! - Optionally generates an embedding for the tool's codebase
+//! - Builds the tool in release mode using `cargo build --release`
+//!
+//! The build process generates an embedding file (`.brwse-embedding`) by default,
+//! which can be used for semantic search and code understanding. This step can be
+//! skipped with the `--skip-embed` flag.
+//!
+//! # Error Handling
+//!
+//! Embedding generation failures are non-fatal - the command will print a warning
+//! and continue with the cargo build. However, cargo build failures will terminate
+//! the command with an error.
 
 use std::{ffi::OsStr, path::PathBuf, process::Command};
 
@@ -9,35 +23,81 @@ use indicatif::{ProgressBar, ProgressStyle};
 use operai_embedding::{EmbeddingGenerator, write_embedding_file};
 use tracing::info;
 
-/// Arguments for the `build` command.
+/// Command-line arguments for the build command.
 #[derive(Args)]
 pub struct BuildArgs {
-    /// Path to the crate to build (defaults to current directory).
+    /// Path to the crate directory to build.
+    ///
+    /// Defaults to the current directory if not specified.
     #[arg(short, long)]
     pub path: Option<PathBuf>,
 
     /// Skip embedding generation.
+    ///
+    /// When set to `true`, the build process will not generate an embedding file
+    /// and will proceed directly to the cargo build step.
     #[arg(long)]
     pub skip_embed: bool,
 
-    /// Embedding provider (fastembed or openai).
+    /// Embedding provider to use.
+    ///
+    /// Specifies which embedding service to use (e.g., "fastembed", "openai").
+    /// If not specified, uses the default provider from the embedding configuration.
     #[arg(short = 'P', long)]
     pub provider: Option<String>,
 
     /// Embedding model to use.
+    ///
+    /// Specifies which model to use for generating embeddings.
+    /// If not specified, uses the default model for the selected provider.
     #[arg(short, long)]
     pub model: Option<String>,
 
-    /// Additional arguments to pass to cargo build.
+    /// Additional arguments to pass to `cargo build`.
+    ///
+    /// These arguments are passed through directly to cargo and can be used to
+    /// specify features, target, etc. They must appear after `--` on the command line.
     #[arg(last = true)]
     pub cargo_args: Vec<String>,
 }
 
-/// Builds the tool crate, optionally generating embeddings first.
+/// Runs the build command with the given arguments.
+///
+/// This is the main entry point for the `cargo operai build` command.
+/// It delegates to `run_with` with "cargo" as the program.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The cargo build process fails to execute
+/// - The cargo build command returns a non-zero exit code
 pub async fn run(args: &BuildArgs) -> Result<()> {
     run_with(args, "cargo").await
 }
 
+/// Runs the build command with a custom cargo program.
+///
+/// This function is primarily used for testing to inject a fake cargo binary.
+/// It performs the following steps:
+///
+/// 1. Determines the crate path (defaults to current directory if not specified)
+/// 2. If `skip_embed` is false, attempts to generate an embedding:
+///    - Creates an `EmbeddingGenerator` with the specified provider and model
+///    - Generates an embedding for the crate
+///    - Writes the embedding to `.brwse-embedding` in the crate directory
+///    - Embedding failures are logged but do not stop the build
+/// 3. Runs `cargo build --release` with any additional cargo arguments
+/// 4. Returns an error if cargo build fails
+///
+/// # Type Parameters
+///
+/// * `P` - A type that can be converted to an OS string (e.g., `&str`, `PathBuf`)
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The cargo program cannot be executed
+/// - The cargo build command returns a non-zero exit code
 async fn run_with<P>(args: &BuildArgs, cargo_program: P) -> Result<()>
 where
     P: AsRef<OsStr>,
@@ -134,15 +194,22 @@ mod tests {
     use super::*;
     use crate::testing;
 
+    /// Acquires the async test lock to prevent concurrent test execution.
     async fn test_lock_async() -> tokio::sync::MutexGuard<'static, ()> {
         testing::test_lock_async().await
     }
 
+    /// RAII guard that restores the previous working directory when dropped.
+    ///
+    /// This is used in tests to temporarily change the current directory and
+    /// automatically restore it when the test completes.
     struct CurrentDirGuard {
         previous: PathBuf,
     }
 
     impl CurrentDirGuard {
+        /// Sets the current directory to `path` and returns a guard that will
+        /// restore the previous directory when dropped.
         fn set(path: &Path) -> anyhow::Result<Self> {
             let previous = std::env::current_dir()?;
             std::env::set_current_dir(path)?;
@@ -156,11 +223,19 @@ mod tests {
         }
     }
 
+    /// RAII guard that creates a temporary directory and deletes it when dropped.
+    ///
+    /// The directory name includes:
+    /// - The provided prefix
+    /// - A nanosecond timestamp
+    /// - The process ID
+    /// - A counter to ensure uniqueness
     struct TestTempDir {
         path: PathBuf,
     }
 
     impl TestTempDir {
+        /// Creates a new temporary directory with a unique name.
         fn new(prefix: &str) -> anyhow::Result<Self> {
             static COUNTER: AtomicU64 = AtomicU64::new(0);
             let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -175,6 +250,7 @@ mod tests {
             Ok(Self { path })
         }
 
+        /// Returns a reference to the temporary directory path.
         fn path(&self) -> &Path {
             &self.path
         }
@@ -186,6 +262,15 @@ mod tests {
         }
     }
 
+    /// Installs a fake cargo binary in the specified directory.
+    ///
+    /// The fake cargo records:
+    /// - Its current working directory to `cargo_cwd.txt`
+    /// - Its arguments to `cargo_args.txt`
+    /// - Exits with the specified `exit_code`
+    ///
+    /// This is used to test that the build command correctly invokes cargo
+    /// with the right arguments and in the right directory.
     fn install_fake_cargo(bin_dir: &Path, exit_code: i32) -> anyhow::Result<PathBuf> {
         #[cfg(windows)]
         {
@@ -215,6 +300,7 @@ mod tests {
         }
     }
 
+    /// Reads a file and returns its lines as a vector of strings.
     fn read_lines(path: &Path) -> anyhow::Result<Vec<String>> {
         Ok(fs::read_to_string(path)?
             .lines()

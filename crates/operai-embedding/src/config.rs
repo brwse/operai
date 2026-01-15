@@ -1,4 +1,43 @@
-//! Configuration for cargo-operai.
+//! Configuration structures for embedding generation.
+//!
+//! This module provides configuration types for the embedding system, supporting
+//! multiple providers (FastEmbed and OpenAI) with TOML-based configuration files.
+//!
+//! # Configuration Hierarchy
+//!
+//! The system uses a two-level configuration approach:
+//!
+//! 1. **Global Config** (`Config`) - User-level settings loaded from:
+//!    - `OPERAI_CONFIG_PATH` environment variable (if set)
+//!    - `~/.config/operai/config.toml` (fallback)
+//!    - `.operai/config.toml` (final fallback)
+//!
+//! 2. **Project Config** (`ProjectConfig`) - Project-level overrides loaded from:
+//!    - `OPERAI_PROJECT_CONFIG_PATH` environment variable (if set)
+//!    - `./operai.toml` (fallback)
+//!
+//! # Configuration Priority
+//!
+//! When resolving settings, the priority order (highest to lowest) is:
+//! - CLI arguments (not handled by this module)
+//! - Project config values
+//! - Global config values
+//! - Default values
+//!
+//! # Example
+//!
+//! ```toml
+//! # ~/.config/operai/config.toml
+//! [embedding]
+//! provider = "fastembed"
+//! model = "nomic-embed-text-v1.5"
+//!
+//! [embedding.fastembed]
+//! show_download_progress = true
+//!
+//! [embedding.openai]
+//! api_key_env = "OPENAI_API_KEY"
+//! ```
 
 use std::path::PathBuf;
 
@@ -17,27 +56,41 @@ fn dirs_config_path() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".config/operai/config.toml"))
 }
 
-/// Global configuration stored at `~/.config/operai/config.toml`.
+/// Global user-level configuration for the embedding system.
+///
+/// This configuration is typically stored in the user's home directory and
+/// contains default settings for embedding generation across all projects.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Config {
+    /// Embedding-specific configuration including provider selection and model settings.
     #[serde(default)]
     pub embedding: EmbeddingConfig,
 }
 
-/// Settings for embedding generation used by the `embed` command.
+/// Configuration settings for embedding generation.
+///
+/// Defines which provider to use (FastEmbed or OpenAI) along with
+/// provider-specific settings.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
-    /// Provider name: `"fastembed"` or `"openai"`.
+    /// The embedding provider to use.
+    ///
+    /// Supported values: "fastembed" or "openai". Defaults to "fastembed".
     #[serde(default = "default_provider")]
     pub provider: String,
 
-    /// Overrides the provider's default model.
+    /// Optional model name override.
+    ///
+    /// If specified, this overrides the default model for the selected provider.
+    /// Each provider has its own set of supported models.
     #[serde(default)]
     pub model: Option<String>,
 
+    /// FastEmbed-specific configuration.
     #[serde(default)]
     pub fastembed: FastEmbedConfig,
 
+    /// OpenAI-specific configuration.
     #[serde(default)]
     pub openai: OpenAIConfig,
 }
@@ -57,14 +110,25 @@ fn default_provider() -> String {
     "fastembed".to_string()
 }
 
-/// `FastEmbed` provider settings (local embeddings using ONNX).
+/// Configuration for FastEmbed embedding provider.
+///
+/// FastEmbed is a local embedding provider that runs models on the local machine.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FastEmbedConfig {
-    /// Embedding model name (default: `nomic-embed-text-v1.5`).
+    /// The FastEmbed model to use.
+    ///
+    /// Supported models include:
+    /// - "nomic-embed-text-v1.5" (default)
+    /// - "nomic-embed-text-v1.5-q" (quantized version)
+    /// - "all-minilm-l6-v2"
+    /// - "bge-small-en-v1.5"
+    /// - "bge-base-en-v1.5"
     #[serde(default = "default_fastembed_model")]
     pub model: String,
 
-    /// Whether to show model download progress.
+    /// Whether to display download progress when downloading models.
+    ///
+    /// Models are downloaded on first use and cached locally.
     #[serde(default = "default_show_download_progress")]
     pub show_download_progress: bool,
 }
@@ -86,11 +150,15 @@ fn default_show_download_progress() -> bool {
     true
 }
 
-/// `OpenAI` provider settings.
+/// Configuration for OpenAI embedding provider.
+///
+/// OpenAI is a cloud-based embedding provider that requires an API key.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OpenAIConfig {
-    /// Environment variable name containing the API key (default:
-    /// `OPENAI_API_KEY`).
+    /// Environment variable name containing the OpenAI API key.
+    ///
+    /// The actual API key is read from this environment variable at runtime.
+    /// Defaults to "OPENAI_API_KEY".
     #[serde(default = "default_openai_key_env")]
     pub api_key_env: String,
 }
@@ -108,30 +176,63 @@ fn default_openai_key_env() -> String {
 }
 
 impl Config {
+    /// Loads the global configuration from the default path.
+    ///
+    /// This method searches for the configuration file in the following order:
+    /// 1. Path specified by `OPERAI_CONFIG_PATH` environment variable
+    /// 2. `~/.config/operai/config.toml`
+    /// 3. `.operai/config.toml`
+    ///
+    /// If no configuration file is found, default values are used.
+    ///
     /// # Errors
-    /// Returns an error if the config file exists but cannot be read or parsed.
+    ///
+    /// Returns an error if the configuration file exists but cannot be read or parsed.
     pub fn load() -> Result<Self> {
         load_toml_or_default(&config_path())
     }
 
+    /// Loads the global configuration from a specific path.
+    ///
+    /// If the specified file does not exist, default values are used.
+    ///
     /// # Errors
-    /// Returns an error if the config file exists but cannot be read or parsed.
+    ///
+    /// Returns an error if the file exists but cannot be read or parsed.
     pub fn load_from(path: &std::path::Path) -> Result<Self> {
         load_toml_or_default(path)
     }
 }
 
-/// Project-local overrides, loaded from `.operai.toml`.
+/// Project-level configuration for embedding settings.
+///
+/// This configuration allows per-project overrides of embedding settings,
+/// typically stored in `./operai.toml` at the project root.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProjectConfig {
+    /// Optional override for the embedding provider.
+    ///
+    /// If set, this overrides the provider from the global configuration.
     pub embedding_provider: Option<String>,
+
+    /// Optional override for the embedding model.
+    ///
+    /// If set, this overrides the model from the global configuration.
     pub embedding_model: Option<String>,
 }
 
 impl ProjectConfig {
+    /// Loads the project configuration from the default path.
+    ///
+    /// This method searches for the configuration file in the following order:
+    /// 1. Path specified by `OPERAI_PROJECT_CONFIG_PATH` environment variable
+    /// 2. `./operai.toml`
+    ///
+    /// If no configuration file is found, default values (all `None`) are used.
+    ///
     /// # Errors
-    /// Returns an error if the project config file exists but cannot be read or
-    /// parsed.
+    ///
+    /// Returns an error if the configuration file exists but cannot be read or parsed.
     pub fn load() -> Result<Self> {
         if let Ok(path) = std::env::var("OPERAI_PROJECT_CONFIG_PATH") {
             return load_toml_or_default(&PathBuf::from(path));
@@ -139,9 +240,13 @@ impl ProjectConfig {
         load_toml_or_default(&PathBuf::from("operai.toml"))
     }
 
+    /// Loads the project configuration from a specific path.
+    ///
+    /// If the specified file does not exist, default values are used.
+    ///
     /// # Errors
-    /// Returns an error if the project config file exists but cannot be read or
-    /// parsed.
+    ///
+    /// Returns an error if the file exists but cannot be read or parsed.
     pub fn load_from(path: &std::path::Path) -> Result<Self> {
         load_toml_or_default(path)
     }

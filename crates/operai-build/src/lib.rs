@@ -1,10 +1,43 @@
-//! Build script utilities for Operai tools.
+//! Build script support for embedding Operai agent code into binaries.
+//!
+//! This module provides build-time code generation functionality for Operai projects.
+//! It reads a binary embedding file (`.brwse-embedding`) containing pre-computed
+//! vector embeddings of agent code, and generates Rust constants that can be
+//! compiled into the final binary.
+//!
+//! # Generated Output
+//!
+//! When a `.brwse-embedding` file exists, this module generates:
+//! - `EMBEDDING`: A slice of `f32` values representing the embedding vector
+//! - `EMBEDDING_DIM`: The dimension/length of the embedding vector
+//!
+//! When the file doesn't exist, empty constants are generated.
+//!
+//! # Embedding File Format
+//!
+//! The `.brwse-embedding` file contains raw little-endian f32 values. Each
+//! embedding is serialized as 4 bytes per float value. The file size must
+//! be divisible by 4.
 
 use std::{env, fs, path::Path};
 
-/// Sets up the build environment for an Operai tool crate.
+/// Performs build-time setup for embedding generation.
 ///
-/// This currently handles embedding generation from `.brwse-embedding`.
+/// This function is called from build scripts (`build.rs`) to:
+/// 1. Set the `operai_embedding` cfg flag
+/// 2. Read `.brwse-embedding` if it exists
+/// 3. Generate `embedding.rs` in the OUT_DIR with embedding constants
+///
+/// # Panics
+///
+/// - If `OUT_DIR` environment variable is not set
+/// - If the embedding file size is not divisible by 4
+/// - If reading or writing files fails
+///
+/// # Cargo Build Behavior
+///
+/// Marks `.brwse-embedding` as a build dependency, causing the build to
+/// rerun when that file changes.
 pub fn setup() {
     println!("cargo:rustc-check-cfg=cfg(operai_embedding)");
     println!("cargo:rustc-cfg=operai_embedding");
@@ -31,19 +64,15 @@ pub fn setup() {
         let array_content = float_strs.join(", ");
 
         format!(
-            r#"/// Pre-computed embedding vector for semantic search.
-pub const EMBEDDING: &[f32] = &[{array_content}];
+            r#"pub const EMBEDDING: &[f32] = &[{array_content}];
 
-/// Embedding dimension.
 #[allow(dead_code)]
 pub const EMBEDDING_DIM: usize = {dim};
 "#
         )
     } else {
-        r#"/// Pre-computed embedding vector (not generated).
-pub const EMBEDDING: &[f32] = &[];
+        r#"pub const EMBEDDING: &[f32] = &[];
 
-/// Embedding dimension.
 #[allow(dead_code)]
 pub const EMBEDDING_DIM: usize = 0;
 "#
