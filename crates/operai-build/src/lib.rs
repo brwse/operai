@@ -1,9 +1,9 @@
 //! Build script support for embedding Operai agent code into binaries.
 //!
-//! This module provides build-time code generation functionality for Operai projects.
-//! It reads a binary embedding file (`.brwse-embedding`) containing pre-computed
-//! vector embeddings of agent code, and generates Rust constants that can be
-//! compiled into the final binary.
+//! This module provides build-time code generation functionality for Operai
+//! projects. It reads a binary embedding file (`.brwse-embedding`) containing
+//! pre-computed vector embeddings of agent code, and generates Rust constants
+//! that can be compiled into the final binary.
 //!
 //! # Generated Output
 //!

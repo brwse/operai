@@ -23,21 +23,27 @@
 //! ## Loading Phase (Not Thread-Safe)
 //!
 //! During tool loading, the registry requires exclusive mutable access:
-//! - [`ToolRegistry::load_library`] takes `&mut self` and cannot be called concurrently
-//! - Load all tools before wrapping the registry in [`Arc`] for concurrent access
+//! - [`ToolRegistry::load_library`] takes `&mut self` and cannot be called
+//!   concurrently
+//! - Load all tools before wrapping the registry in [`Arc`] for concurrent
+//!   access
 //!
 //! ## Execution Phase (Thread-Safe)
 //!
 //! Once tools are loaded and the registry is wrapped in [`Arc`]:
-//! - [`ToolRegistry::get`], [`ToolRegistry::list`], and [`ToolRegistry::search`] can be called concurrently
+//! - [`ToolRegistry::get`], [`ToolRegistry::list`], and
+//!   [`ToolRegistry::search`] can be called concurrently
 //! - Tool handles are wrapped in [`Arc`] for safe sharing across threads
-//! - Tool invocations via [`ToolHandle::call`] may occur concurrently on different threads
-//! - The in-flight request counter uses atomic operations for thread-safe tracking
+//! - Tool invocations via [`ToolHandle::call`] may occur concurrently on
+//!   different threads
+//! - The in-flight request counter uses atomic operations for thread-safe
+//!   tracking
 //!
 //! # Semantic Search
 //!
 //! Tools can include embeddings for semantic search. The registry provides
-//! [`ToolRegistry::search`] to find tools by cosine similarity between embeddings.
+//! [`ToolRegistry::search`] to find tools by cosine similarity between
+//! embeddings.
 
 use std::{
     collections::HashMap,
@@ -60,9 +66,9 @@ use crate::loader::{LoadError, ToolLibrary};
 
 /// Errors that can occur during tool registry operations.
 ///
-/// This enum represents failures during tool loading, registration, or invocation.
-/// It uses `#[non_exhaustive]` to allow adding new error variants without breaking
-/// existing code.
+/// This enum represents failures during tool loading, registration, or
+/// invocation. It uses `#[non_exhaustive]` to allow adding new error variants
+/// without breaking existing code.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum RegistryError {
@@ -76,7 +82,8 @@ pub enum RegistryError {
 
     /// Attempted to register a tool with a qualified ID that already exists.
     ///
-    /// Each tool must have a unique qualified ID (format: `crate-name.tool-name`).
+    /// Each tool must have a unique qualified ID (format:
+    /// `crate-name.tool-name`).
     #[error("duplicate tool ID: {0}")]
     DuplicateId(String),
 
@@ -93,7 +100,8 @@ pub enum RegistryError {
 ///
 /// # Fields
 ///
-/// - `qualified_id`: Full identifier including crate name (e.g., `crate-name.tool-name`)
+/// - `qualified_id`: Full identifier including crate name (e.g.,
+///   `crate-name.tool-name`)
 /// - `tool_id`: Tool identifier within its crate (e.g., `tool-name`)
 /// - `crate_name`: Name of the crate/library providing this tool
 /// - `crate_version`: Version of the crate/library
@@ -102,7 +110,8 @@ pub enum RegistryError {
 /// - `input_schema`: JSON Schema describing valid inputs
 /// - `output_schema`: JSON Schema describing output format
 /// - `credential_schema`: Optional schema for required credentials
-/// - `capabilities`: List of capability identifiers (e.g., `["stream", "async"]`)
+/// - `capabilities`: List of capability identifiers (e.g., `["stream",
+///   "async"]`)
 /// - `tags`: Optional tags for categorization and search
 /// - `embedding`: Optional vector embedding for semantic search
 #[derive(Debug, Clone)]
@@ -163,11 +172,13 @@ impl ToolHandle {
 
     /// Invokes the tool with the provided input.
     ///
-    /// This method is instrumented with tracing and logs the tool's qualified ID.
+    /// This method is instrumented with tracing and logs the tool's qualified
+    /// ID.
     ///
     /// # Arguments
     ///
-    /// * `context` - Call context including session, user, and credential information
+    /// * `context` - Call context including session, user, and credential
+    ///   information
     /// * `input` - Serialized input bytes (typically JSON)
     ///
     /// # Returns
@@ -217,11 +228,12 @@ impl ToolHandle {
 ///
 /// # Thread Safety
 ///
-/// **Loading phase**: `load_library` requires `&mut self` and is not thread-safe.
+/// **Loading phase**: `load_library` requires `&mut self` and is not
+/// thread-safe.
 ///
-/// **Execution phase**: Once wrapped in `Arc`, query operations (`get`, `list`, `search`)
-/// are thread-safe and can be called concurrently. Tool handles use interior `Arc`
-/// wrapping for safe concurrent invocation.
+/// **Execution phase**: Once wrapped in `Arc`, query operations (`get`, `list`,
+/// `search`) are thread-safe and can be called concurrently. Tool handles use
+/// interior `Arc` wrapping for safe concurrent invocation.
 ///
 /// # Example
 ///
@@ -234,15 +246,18 @@ impl ToolHandle {
 /// let runtime_ctx = RuntimeContext::default();
 ///
 /// // Load a tool library
-/// registry.load_library(
-///     "./path/to/tool.so",
-///     Some("sha256-checksum"),
-///     None,
-///     &runtime_ctx
-/// ).await?;
+/// registry
+///     .load_library(
+///         "./path/to/tool.so",
+///         Some("sha256-checksum"),
+///         None,
+///         &runtime_ctx,
+///     )
+///     .await?;
 ///
 /// // Get a tool handle
-/// let tool = registry.get("crate-name.tool-name")
+/// let tool = registry
+///     .get("crate-name.tool-name")
 ///     .expect("tool not found");
 ///
 /// // List all tools
@@ -257,7 +272,7 @@ pub struct ToolRegistry {
     libraries: Vec<ToolLibrary>,
     /// Map from qualified ID to tool handle
     tools: HashMap<String, Arc<ToolHandle>>,
-    /// Tool embeddings for semantic search (qualified_id, embedding)
+    /// Tool embeddings for semantic search (`qualified_id`, embedding)
     embeddings: Vec<(String, Vec<f32>)>,
     /// Counter for tracking in-flight requests
     inflight: AtomicU64,
@@ -305,10 +320,11 @@ impl ToolRegistry {
         }
     }
 
-    /// Loads a tool library from a dynamic library file and registers all its tools.
+    /// Loads a tool library from a dynamic library file and registers all its
+    /// tools.
     ///
-    /// This method validates the library's checksum (if provided), loads it from disk,
-    /// initializes the module, and registers all exported tools.
+    /// This method validates the library's checksum (if provided), loads it
+    /// from disk, initializes the module, and registers all exported tools.
     ///
     /// # Arguments
     ///
@@ -345,8 +361,9 @@ impl ToolRegistry {
 
     /// Registers a pre-loaded tool module reference.
     ///
-    /// This is useful for testing or when you have a module reference that wasn't
-    /// loaded from a file. The method validates ABI version and initializes the module.
+    /// This is useful for testing or when you have a module reference that
+    /// wasn't loaded from a file. The method validates ABI version and
+    /// initializes the module.
     ///
     /// # Arguments
     ///
@@ -386,18 +403,20 @@ impl ToolRegistry {
 
     /// Internal method to register tools from a module reference.
     ///
-    /// This method extracts tool descriptors from the module, creates tool handles,
-    /// and adds them to the registry. It also builds the embedding index for search.
+    /// This method extracts tool descriptors from the module, creates tool
+    /// handles, and adds them to the registry. It also builds the embedding
+    /// index for search.
     ///
     /// # Arguments
     ///
     /// * `module` - FFI-compatible reference to the tool module
-    /// * `credentials` - Optional system credentials (rkyv-encoded and stored in each handle)
+    /// * `credentials` - Optional system credentials (rkyv-encoded and stored
+    ///   in each handle)
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError::DuplicateId`] if any qualified tool ID conflicts
-    /// with an already-registered tool.
+    /// Returns [`RegistryError::DuplicateId`] if any qualified tool ID
+    /// conflicts with an already-registered tool.
     fn register_module_ref(
         &mut self,
         module: ToolModuleRef,
@@ -539,13 +558,15 @@ impl ToolRegistry {
     ///
     /// # Arguments
     ///
-    /// * `query_embedding` - Vector embedding of the query (typically from an embedding model)
+    /// * `query_embedding` - Vector embedding of the query (typically from an
+    ///   embedding model)
     /// * `limit` - Maximum number of results to return
     ///
     /// # Returns
     ///
-    /// A vector of `(ToolInfo, score)` tuples, where `score` is the cosine similarity
-    /// in the range `[-1.0, 1.0]`. Higher values indicate greater similarity.
+    /// A vector of `(ToolInfo, score)` tuples, where `score` is the cosine
+    /// similarity in the range `[-1.0, 1.0]`. Higher values indicate
+    /// greater similarity.
     ///
     /// # Notes
     ///
@@ -584,9 +605,9 @@ impl ToolRegistry {
 
     /// Creates a guard that tracks an in-flight request.
     ///
-    /// The guard increments the counter on creation and automatically decrements
-    /// it when dropped. This is safer than manually calling [`Self::start_request`]
-    /// and [`Self::end_request`].
+    /// The guard increments the counter on creation and automatically
+    /// decrements it when dropped. This is safer than manually calling
+    /// [`Self::start_request`] and [`Self::end_request`].
     ///
     /// # Example
     ///
@@ -604,9 +625,9 @@ impl ToolRegistry {
 
     /// Decrements the in-flight request counter.
     ///
-    /// Uses saturating subtraction to prevent underflow. If you need to call this
-    /// manually, consider using [`Self::start_request_guard`] instead for RAII-style
-    /// cleanup.
+    /// Uses saturating subtraction to prevent underflow. If you need to call
+    /// this manually, consider using [`Self::start_request_guard`] instead
+    /// for RAII-style cleanup.
     pub fn end_request(&self) {
         let _ = self
             .inflight
@@ -623,9 +644,9 @@ impl ToolRegistry {
 
     /// Waits for all in-flight requests to complete.
     ///
-    /// This method polls the in-flight counter every 10ms until it reaches zero.
-    /// It's useful for ensuring all tool invocations have finished before shutting
-    /// down the registry.
+    /// This method polls the in-flight counter every 10ms until it reaches
+    /// zero. It's useful for ensuring all tool invocations have finished
+    /// before shutting down the registry.
     ///
     /// # Example
     ///
@@ -636,6 +657,7 @@ impl ToolRegistry {
     /// let registry = ToolRegistry::new();
     /// // ... do work that spawns tool invocations
     /// registry.drain().await; // Wait for all to complete
+    /// //
     /// # }
     /// ```
     pub async fn drain(&self) {
@@ -714,7 +736,8 @@ mod tests {
         FfiFuture::new(async { ToolResult::Ok })
     }
 
-    /// Test helper: Creates a mock tool call function that echoes the tool ID and input.
+    /// Test helper: Creates a mock tool call function that echoes the tool ID
+    /// and input.
     extern "C" fn test_tool_call(args: CallArgs<'_>) -> FfiFuture<CallResult> {
         let tool_id = args.tool_id.as_str().to_string();
         let input = args.input.as_slice().to_vec();

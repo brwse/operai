@@ -1,10 +1,13 @@
 //! Operai runtime for tool execution and management.
 //!
-//! This crate provides the runtime layer for the Operai tool system, responsible for:
+//! This crate provides the runtime layer for the Operai tool system,
+//! responsible for:
 //!
 //! - **Tool Discovery**: Loading and registering dynamic tool libraries
-//! - **Tool Execution**: Invoking tools with policy enforcement and credential management
-//! - **Remote Access**: gRPC and MCP transports for serving tools over the network
+//! - **Tool Execution**: Invoking tools with policy enforcement and credential
+//!   management
+//! - **Remote Access**: gRPC and MCP transports for serving tools over the
+//!   network
 //! - **Policy Enforcement**: Pre- and post-execution policy checks
 //!
 //! # Architecture
@@ -13,13 +16,15 @@
 //!
 //! - [`RuntimeBuilder`] - Constructs configured runtime instances
 //! - [`Runtime`] - Enum that abstracts over local and remote execution
-//! - [`LocalRuntime`]/[`RemoteRuntime`] - Concrete implementations for in-process and networked tool execution
+//! - [`LocalRuntime`]/[`RemoteRuntime`] - Concrete implementations for
+//!   in-process and networked tool execution
 //!
 //! # Local vs Remote Execution
 //!
 //! The runtime can operate in two modes:
 //!
-//! - **Local**: Loads tool libraries dynamically and executes them in-process with full policy enforcement
+//! - **Local**: Loads tool libraries dynamically and executes them in-process
+//!   with full policy enforcement
 //! - **Remote**: Connects to a remote gRPC server and delegates tool execution
 //!
 //! # Example
@@ -29,18 +34,15 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let runtime = RuntimeBuilder::new()
-//!     .local()
-//!     .build()
-//!     .await?;
+//! let runtime = RuntimeBuilder::new().local().build().await?;
 //!
 //! // List available tools
-//! let tools = runtime.list_tools(
-//!     operai_runtime::proto::ListToolsRequest {
+//! let tools = runtime
+//!     .list_tools(operai_runtime::proto::ListToolsRequest {
 //!         page_size: 100,
 //!         page_token: String::new(),
-//!     }
-//! ).await?;
+//!     })
+//!     .await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -64,13 +66,14 @@ pub mod builder;
 
 /// Core runtime implementations for local and remote tool execution.
 ///
-/// Provides [`Runtime`] (enum abstracting local/remote), [`LocalRuntime`] (in-process execution),
-/// and [`RemoteRuntime`] (gRPC client).
+/// Provides [`Runtime`] (enum abstracting local/remote), [`LocalRuntime`]
+/// (in-process execution), and [`RemoteRuntime`] (gRPC client).
 pub mod runtime;
 
 /// Semantic search functionality for tool discovery.
 ///
-/// Provides [`SearchEmbedder`] trait for generating vector embeddings from text queries.
+/// Provides [`SearchEmbedder`] trait for generating vector embeddings from text
+/// queries.
 pub mod search;
 
 /// Transport layer implementations for serving tools over network protocols.

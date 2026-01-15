@@ -86,9 +86,9 @@ where
     );
 
     // Create search embedder from config if embedding is configured
-    let search_embedder = config.embedding.as_ref().map(|embedding_config| {
-        let generator = EmbeddingGenerator::from_config(config)
-            .context("failed to initialize search embedder");
+    let search_embedder = config.embedding.as_ref().and_then(|_| {
+        let generator =
+            EmbeddingGenerator::from_config(config).context("failed to initialize search embedder");
         match generator {
             Ok(embedder) => {
                 println!(
@@ -107,7 +107,7 @@ where
                 None
             }
         }
-    }).flatten();
+    });
 
     let local_runtime = if let Some(embedder) = search_embedder {
         local_runtime.with_search_embedder(Some(embedder))
@@ -405,9 +405,13 @@ mod tests {
 
         let (tx, rx) = oneshot::channel::<()>();
         let server_handle = tokio::spawn(async move {
-            run_with_shutdown(&args, async {
-                let _ = rx.await;
-            }, &operai_core::Config::empty())
+            run_with_shutdown(
+                &args,
+                async {
+                    let _ = rx.await;
+                },
+                &operai_core::Config::empty(),
+            )
             .await
         });
 

@@ -1,20 +1,23 @@
 //! Transport layer implementations for serving tools over different protocols.
 //!
-//! This module provides transport-layer implementations that expose the tool runtime
-//! through various protocols. Each transport adapts the core [`LocalRuntime`](crate::runtime::LocalRuntime)
-//! to a specific wire protocol, handling serialization, authentication, and protocol-specific
-//! conventions.
+//! This module provides transport-layer implementations that expose the tool
+//! runtime through various protocols. Each transport adapts the core
+//! [`LocalRuntime`](crate::runtime::LocalRuntime) to a specific wire protocol,
+//! handling serialization, authentication, and protocol-specific conventions.
 //!
 //! # Available Transports
 //!
-//! - [`grpc`] - gRPC/HTTP2 transport using Tonic, providing high-performance RPC access
-//! - [`mcp`] - Model Context Protocol (MCP) transport for HTTP-based tool serving (feature-gated)
+//! - [`grpc`] - gRPC/HTTP2 transport using Tonic, providing high-performance
+//!   RPC access
+//! - [`mcp`] - Model Context Protocol (MCP) transport for HTTP-based tool
+//!   serving (feature-gated)
 //!
 //! # Architecture
 //!
 //! All transports follow a similar pattern:
 //! 1. Wrap a [`LocalRuntime`] instance
-//! 2. Extract authentication/authorization metadata from protocol-specific headers
+//! 2. Extract authentication/authorization metadata from protocol-specific
+//!    headers
 //! 3. Convert protocol requests to internal runtime requests
 //! 4. Return protocol-formatted responses
 //!
@@ -42,6 +45,7 @@ pub mod grpc;
 /// Model Context Protocol (MCP) transport implementation.
 ///
 /// Provides an [`McpService`](mcp::McpService) that implements the MCP protocol
-/// for HTTP-based tool serving with streaming support. Requires the `mcp` feature.
+/// for HTTP-based tool serving with streaming support. Requires the `mcp`
+/// feature.
 #[cfg(feature = "mcp")]
 pub mod mcp;

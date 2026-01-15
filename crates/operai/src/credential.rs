@@ -1,9 +1,9 @@
-
 //! Credential schema definitions and runtime introspection.
 //!
 //! This module provides types for defining and registering credential schemas
 //! that can be discovered at runtime. Credentials are used to authenticate with
-//! external services and APIs (e.g., API keys, OAuth tokens, database credentials).
+//! external services and APIs (e.g., API keys, OAuth tokens, database
+//! credentials).
 //!
 //! # Defining Credentials
 //!
@@ -43,12 +43,13 @@
 //!
 //! Credentials are organized into two separate namespaces:
 //!
-//! - **System credentials**: Provider-level credentials configured by the operator
+//! - **System credentials**: Provider-level credentials configured by the
+//!   operator
 //! - **User credentials**: User-specific credentials for authentication
 //!
-//! Both namespaces are independent, allowing the same credential name to exist in both
-//! with different values. Use `define_system_credential!` for system credentials and
-//! `define_user_credential!` for user credentials.
+//! Both namespaces are independent, allowing the same credential name to exist
+//! in both with different values. Use `define_system_credential!` for system
+//! credentials and `define_user_credential!` for user credentials.
 //!
 //! # Runtime Discovery
 //!
@@ -119,7 +120,8 @@ pub struct CredentialFieldSchema {
 ///
 /// # Serialization
 ///
-/// When serialized, `CredentialEntry` produces a JSON object with the following structure:
+/// When serialized, `CredentialEntry` produces a JSON object with the following
+/// structure:
 ///
 /// ```json
 /// {
@@ -183,11 +185,6 @@ impl Serialize for CredentialEntry {
     }
 }
 
-/// Collect credential entries for runtime introspection.
-///
-/// This macro invocation registers `CredentialEntry` with the `inventory` crate,
-/// enabling runtime discovery of all registered credential types via
-/// `inventory::iter::<CredentialEntry>()`.
 inventory::collect!(CredentialEntry);
 
 #[cfg(test)]

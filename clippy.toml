@@ -7,5 +7,6 @@ doc-valid-idents = [
     "OneDrive",
     "OneNote",
     "SharePoint",
+    "SemVer",
     "..",
 ]

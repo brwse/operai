@@ -1,8 +1,8 @@
-//! Embedding utilities backed by embed_anything.
+//! Embedding utilities backed by `embed_anything`.
 //!
 //! Supports both local and remote embedding providers:
-//! - **Local**: Hugging Face models via embed_anything (default)
-//! - **Remote**: OpenAI, Gemini, Cohere cloud APIs
+//! - **Local**: Hugging Face models via `embed_anything` (default)
+//! - **Remote**: `OpenAI`, Gemini, Cohere cloud APIs
 
 use std::{fmt::Write as _, path::Path, sync::Arc};
 
@@ -25,7 +25,8 @@ impl Provider {
             "cohere" => Ok(Self::Cohere),
             "local" | "fastembed" | "hf" | "huggingface" => Ok(Self::Local),
             _ => bail!(
-                "unknown embedding provider: {value}. Supported remote: openai, gemini, cohere; local: fastembed"
+                "unknown embedding provider: {value}. Supported remote: openai, gemini, cohere; \
+                 local: fastembed"
             ),
         }
     }
@@ -73,8 +74,7 @@ impl EmbeddingGenerator {
         let embedding_type = config
             .embedding
             .as_ref()
-            .map(|emb| emb.r#type.as_str())
-            .unwrap_or("local");
+            .map_or("local", |emb| emb.r#type.as_str());
 
         let provider = match embedding_type {
             "remote" => {
@@ -86,9 +86,7 @@ impl EmbeddingGenerator {
                 Provider::from_str(kind_str)?
             }
             "local" => Provider::Local,
-            _ => bail!(
-                "unknown embedding type: {embedding_type}. Supported: 'local', 'remote'"
-            ),
+            _ => bail!("unknown embedding type: {embedding_type}. Supported: 'local', 'remote'"),
         };
 
         match provider {
@@ -101,8 +99,9 @@ impl EmbeddingGenerator {
                     .to_string();
                 let resolved_model = resolve_local_model_id(&model_id)?;
                 let token = std::env::var("HF_TOKEN").ok();
-                let embedder = Embedder::from_pretrained_hf(&resolved_model, None, token.as_deref(), None)
-                    .context("failed to initialize local embedder")?;
+                let embedder =
+                    Embedder::from_pretrained_hf(&resolved_model, None, token.as_deref(), None)
+                        .context("failed to initialize local embedder")?;
                 Ok(Self {
                     embedder: Arc::new(embedder),
                 })
@@ -118,8 +117,9 @@ impl EmbeddingGenerator {
                 let api_key = std::env::var(api_key_env)
                     .with_context(|| format!("API key not found: {api_key_env} not set"))?;
                 let cloud_name = provider.cloud_name();
-                let embedder = Embedder::from_pretrained_cloud(cloud_name, &model_id, Some(api_key))
-                    .context(format!("failed to initialize {cloud_name} embedder"))?;
+                let embedder =
+                    Embedder::from_pretrained_cloud(cloud_name, &model_id, Some(api_key))
+                        .context(format!("failed to initialize {cloud_name} embedder"))?;
                 Ok(Self {
                     embedder: Arc::new(embedder),
                 })
@@ -218,7 +218,8 @@ fn resolve_local_model_id(model: &str) -> Result<String> {
                 return Ok(model.to_string());
             }
             bail!(
-                "unknown local model: {model}. Provide a supported alias or a full Hugging Face model id"
+                "unknown local model: {model}. Provide a supported alias or a full Hugging Face \
+                 model id"
             );
         }
     };

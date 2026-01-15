@@ -101,7 +101,11 @@ pub async fn run(args: &McpArgs, config: &operai_core::Config) -> Result<()> {
 /// - The search embedder fails to initialize (when `--searchable` is enabled)
 /// - The server fails to bind to the specified address
 /// - The server encounters an error during operation
-async fn run_with_shutdown<F>(args: &McpArgs, shutdown: F, config: &operai_core::Config) -> Result<()>
+async fn run_with_shutdown<F>(
+    args: &McpArgs,
+    shutdown: F,
+    config: &operai_core::Config,
+) -> Result<()>
 where
     F: Future<Output = ()> + Send + 'static,
 {
@@ -117,12 +121,10 @@ where
         .context("failed to initialize runtime")?;
 
     let search_embedder = if args.searchable {
-        Some(
-            std::sync::Arc::new(CliSearchEmbedder::new(
-                EmbeddingGenerator::from_config(config)
-                    .context("failed to initialize search embedder")?,
-            )) as std::sync::Arc<dyn SearchEmbedder>
-        )
+        Some(std::sync::Arc::new(CliSearchEmbedder::new(
+            EmbeddingGenerator::from_config(config)
+                .context("failed to initialize search embedder")?,
+        )) as std::sync::Arc<dyn SearchEmbedder>)
     } else {
         None
     };

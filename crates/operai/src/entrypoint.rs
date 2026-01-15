@@ -1,24 +1,30 @@
 //! Plugin entrypoint registration and discovery.
 //!
-//! This module provides the registry system for Opera plugins using the [`inventory`] crate.
-//! Plugins register their tools, init handlers, and shutdown handlers through static entries
-//! that are collected into global inventories at compile time.
+//! This module provides the registry system for Opera plugins using the
+//! [`inventory`] crate. Plugins register their tools, init handlers, and
+//! shutdown handlers through static entries that are collected into global
+//! inventories at compile time.
 //!
 //! # Entry Types
 //!
-//! - [`ToolEntry`] - Registers a tool with its metadata, schema functions, and async handler
-//! - [`InitEntry`] - Registers an initialization handler that runs when the plugin loads
-//! - [`ShutdownEntry`] - Registers a cleanup handler that runs when the plugin unloads
+//! - [`ToolEntry`] - Registers a tool with its metadata, schema functions, and
+//!   async handler
+//! - [`InitEntry`] - Registers an initialization handler that runs when the
+//!   plugin loads
+//! - [`ShutdownEntry`] - Registers a cleanup handler that runs when the plugin
+//!   unloads
 //!
 //! # Sealed Pattern
 //!
-//! All entry types include a `__sealed: Sealed` field to prevent direct construction outside
-//! of the generated code (typically from the `operai-macro` crate). This ensures entries
-//! are only created through the procedural macros that validate the registration.
+//! All entry types include a `__sealed: Sealed` field to prevent direct
+//! construction outside of the generated code (typically from the
+//! `operai-macro` crate). This ensures entries are only created through the
+//! procedural macros that validate the registration.
 //!
 //! # Example
 //!
-//! Tools are defined using the `#[tool]` attribute macro from the `operai-macro` crate:
+//! Tools are defined using the `#[tool]` attribute macro from the
+//! `operai-macro` crate:
 //!
 //! ```ignore
 //! use operai::Context;
@@ -40,14 +46,16 @@ use crate::Context;
 /// Async handler function for a tool invocation.
 ///
 /// This function type is called by the runtime when a tool is invoked.
-/// It receives the call context and raw input bytes, and returns raw output bytes.
+/// It receives the call context and raw input bytes, and returns raw output
+/// bytes.
 pub type ToolHandlerFn =
     fn(Context, Vec<u8>) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<u8>>> + Send + 'static>>;
 
 /// Async initialization handler function.
 ///
 /// This function type is called when the plugin is first loaded to perform
-/// any necessary setup, such as establishing connections or initializing resources.
+/// any necessary setup, such as establishing connections or initializing
+/// resources.
 pub type InitFn = fn() -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'static>>;
 
 /// Synchronous shutdown handler function.
@@ -58,9 +66,9 @@ pub type ShutdownFn = fn();
 
 /// Marker type to prevent direct construction of entry types.
 ///
-/// The sealed pattern ensures that entries like [`ToolEntry`] can only be created
-/// through the procedural macros in the `operai-macro` crate, which validate
-/// that all required fields are properly set.
+/// The sealed pattern ensures that entries like [`ToolEntry`] can only be
+/// created through the procedural macros in the `operai-macro` crate, which
+/// validate that all required fields are properly set.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy)]
 pub struct Sealed(pub(crate) ());
@@ -84,7 +92,7 @@ pub struct Sealed(pub(crate) ());
 /// - `__sealed` - Prevents manual construction (use the macro instead)
 #[derive(Debug)]
 pub struct ToolEntry {
-    /// Unique identifier for this tool (e.g., "com.example.my_tool")
+    /// Unique identifier for this tool (e.g., `com.example.my_tool`)
     pub id: &'static str,
     /// Human-readable display name
     pub name: &'static str,
@@ -109,14 +117,14 @@ inventory::collect!(ToolEntry);
 
 /// Registration entry for a plugin initialization handler.
 ///
-/// `InitEntry` registers an async initialization function that runs when the plugin
-/// is first loaded. This is useful for establishing connections, allocating resources,
-/// or performing other one-time setup.
+/// `InitEntry` registers an async initialization function that runs when the
+/// plugin is first loaded. This is useful for establishing connections,
+/// allocating resources, or performing other one-time setup.
 ///
 /// Init handlers are called in the order they were submitted to the inventory.
 #[derive(Debug)]
 pub struct InitEntry {
-    /// Identifier for this init handler (e.g., "database_init")
+    /// Identifier for this init handler (e.g., `database_init`)
     pub name: &'static str,
     /// Async initialization function to run on plugin load
     pub handler: InitFn,
@@ -129,15 +137,15 @@ inventory::collect!(InitEntry);
 
 /// Registration entry for a plugin shutdown handler.
 ///
-/// `ShutdownEntry` registers a synchronous cleanup function that runs when the plugin
-/// is unloaded. This is useful for closing connections, releasing resources, or
-/// performing other cleanup operations.
+/// `ShutdownEntry` registers a synchronous cleanup function that runs when the
+/// plugin is unloaded. This is useful for closing connections, releasing
+/// resources, or performing other cleanup operations.
 ///
-/// Shutdown handlers are called in the order they were submitted to the inventory.
-/// They run synchronously and cannot be async.
+/// Shutdown handlers are called in the order they were submitted to the
+/// inventory. They run synchronously and cannot be async.
 #[derive(Debug)]
 pub struct ShutdownEntry {
-    /// Identifier for this shutdown handler (e.g., "database_cleanup")
+    /// Identifier for this shutdown handler (e.g., `database_cleanup`)
     pub name: &'static str,
     /// Synchronous cleanup function to run on plugin unload
     pub handler: ShutdownFn,

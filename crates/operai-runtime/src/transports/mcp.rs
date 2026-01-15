@@ -216,7 +216,8 @@ impl ServerHandler for McpService {
     /// In standard mode, directly invokes the specified tool from the registry.
     /// In search mode, routes to the appropriate meta-tool handler.
     ///
-    /// Tool names are normalized to include the "tools/" prefix if not already present.
+    /// Tool names are normalized to include the "tools/" prefix if not already
+    /// present.
     fn call_tool(
         &self,
         request: CallToolRequestParam,
@@ -372,8 +373,9 @@ fn default_server_info() -> ServerInfo {
 
 /// Ensures a tool name has the "tools/" prefix.
 ///
-/// Runtime tools are identified with a "tools/" prefix (e.g., "tools/crate.tool").
-/// This function normalizes tool names by adding the prefix if not present.
+/// Runtime tools are identified with a "tools/" prefix (e.g.,
+/// "tools/crate.tool"). This function normalizes tool names by adding the
+/// prefix if not present.
 fn ensure_runtime_tool_name(name: &str) -> String {
     if name.starts_with("tools/") {
         name.to_string()
@@ -559,8 +561,8 @@ fn search_mode_call_tool() -> Tool {
 
 /// Returns the JSON schema for a tool metadata object.
 ///
-/// Defines the structure of tool information returned by search/list operations,
-/// including name, description, schemas, capabilities, and tags.
+/// Defines the structure of tool information returned by search/list
+/// operations, including name, description, schemas, capabilities, and tags.
 fn search_tool_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
@@ -625,7 +627,7 @@ fn non_empty_cow(value: &str) -> Option<Cow<'static, str>> {
     }
 }
 
-/// Parses a JSON schema string into a JsonObject.
+/// Parses a JSON schema string into a `JsonObject`.
 ///
 /// Returns an empty object if the schema is invalid or not an object.
 fn schema_to_object(schema: &str) -> JsonObject {
@@ -635,7 +637,8 @@ fn schema_to_object(schema: &str) -> JsonObject {
     }
 }
 
-/// Extracts a JsonObject from a JSON Value, returning empty object if not an object.
+/// Extracts a `JsonObject` from a JSON Value, returning empty object if not an
+/// object.
 fn schema_to_object_value(value: serde_json::Value) -> JsonObject {
     match value {
         serde_json::Value::Object(map) => map,
@@ -643,7 +646,7 @@ fn schema_to_object_value(value: serde_json::Value) -> JsonObject {
     }
 }
 
-/// Parses a JSON schema string into an optional Arc'd JsonObject.
+/// Parses a JSON schema string into an optional Arc'd `JsonObject`.
 ///
 /// Returns `None` if the schema is invalid or not an object.
 fn schema_to_object_option(schema: &str) -> Option<Arc<JsonObject>> {
@@ -653,7 +656,7 @@ fn schema_to_object_option(schema: &str) -> Option<Arc<JsonObject>> {
     }
 }
 
-/// Converts a protobuf ListToolsResponse to JSON.
+/// Converts a protobuf `ListToolsResponse` to JSON.
 fn list_tools_response_to_json(response: &crate::proto::ListToolsResponse) -> serde_json::Value {
     let tools = response
         .tools
@@ -666,7 +669,7 @@ fn list_tools_response_to_json(response: &crate::proto::ListToolsResponse) -> se
     })
 }
 
-/// Converts a protobuf SearchToolsResponse to JSON.
+/// Converts a protobuf `SearchToolsResponse` to JSON.
 fn search_tools_response_to_json(
     response: &crate::proto::SearchToolsResponse,
 ) -> serde_json::Value {
@@ -690,7 +693,7 @@ fn search_tools_response_to_json(
     })
 }
 
-/// Converts a protobuf CallToolResponse to JSON.
+/// Converts a protobuf `CallToolResponse` to JSON.
 fn call_tool_response_to_json(response: &crate::proto::CallToolResponse) -> serde_json::Value {
     match response.result.as_ref() {
         Some(call_tool_response::Result::Output(output)) => {
@@ -726,7 +729,7 @@ fn proto_tool_to_json(tool: &crate::proto::Tool) -> serde_json::Value {
     })
 }
 
-/// Converts a gRPC Status to an MCP ErrorData.
+/// Converts a gRPC Status to an MCP `ErrorData`.
 ///
 /// Maps gRPC status codes to appropriate MCP error types:
 /// - `NotFound` → `resource_not_found`
@@ -778,18 +781,20 @@ struct CallArgs {
     input: Option<serde_json::Value>,
 }
 
-/// Parses tool arguments from an optional JsonObject.
+/// Parses tool arguments from an optional `JsonObject`.
 ///
-/// Returns an error if the arguments cannot be deserialized into the target type.
+/// Returns an error if the arguments cannot be deserialized into the target
+/// type.
 fn parse_args<T: DeserializeOwned>(args: Option<JsonObject>) -> Result<T, ErrorData> {
     let value = serde_json::Value::Object(args.unwrap_or_default());
     serde_json::from_value(value)
         .map_err(|e| ErrorData::invalid_params(format!("invalid arguments: {e}"), None))
 }
 
-/// Parses tool arguments from an optional JsonObject, using default if None.
+/// Parses tool arguments from an optional `JsonObject`, using default if None.
 ///
-/// Returns the default value if arguments are None, or deserializes them if present.
+/// Returns the default value if arguments are None, or deserializes them if
+/// present.
 fn parse_args_or_default<T: DeserializeOwned + Default>(
     args: Option<JsonObject>,
 ) -> Result<T, ErrorData> {

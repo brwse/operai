@@ -1,12 +1,14 @@
 //! Unified configuration system for Operai.
 //!
-//! This module provides configuration types and a unified resolution algorithm for finding
-//! and loading config files.
+//! This module provides configuration types and a unified resolution algorithm
+//! for finding and loading config files.
 //!
 //! # Configuration Types
 //!
-//! - **Config**: The main project configuration from `operai.toml` - tools, policies, and settings
-//! - **CredentialsConfig**: API keys and secrets from `~/.config/operai/credentials.toml`
+//! - **Config**: The main project configuration from `operai.toml` - tools,
+//!   policies, and settings
+//! - **`CredentialsConfig`**: API keys and secrets from
+//!   `~/.config/operai/credentials.toml`
 //!
 //! # Resolution Algorithm
 //!
@@ -40,9 +42,12 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::fs;
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+};
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -50,8 +55,10 @@ use crate::Policy;
 
 /// Unified configuration file type for all Operai config files.
 ///
-/// This enum represents the different types of configuration files that Operai uses:
-/// - Project config (`operai.toml`) containing tools, policies, and project settings
+/// This enum represents the different types of configuration files that Operai
+/// uses:
+/// - Project config (`operai.toml`) containing tools, policies, and project
+///   settings
 /// - Credentials config (`credentials.toml`) containing API keys and secrets
 ///
 /// Most users should use `Config` directly rather than working with this enum.
@@ -115,9 +122,12 @@ impl ConfigFile {
     ///
     /// # Returns
     ///
-    /// - `Ok(Some(ConfigFile))` if the config file was found and loaded successfully
-    /// - `Ok(None)` if the config file was not found (missing files are not errors)
-    /// - `Err(ConfigError)` if the file was found but could not be loaded or parsed
+    /// - `Ok(Some(ConfigFile))` if the config file was found and loaded
+    ///   successfully
+    /// - `Ok(None)` if the config file was not found (missing files are not
+    ///   errors)
+    /// - `Err(ConfigError)` if the file was found but could not be loaded or
+    ///   parsed
     ///
     /// # Examples
     ///
@@ -136,13 +146,20 @@ impl ConfigFile {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(ConfigError)` if:
+    /// - An environment variable path cannot be read
+    /// - A found config file cannot be read
+    /// - A found config file cannot be parsed
     pub fn resolve(kind: ConfigKind) -> Result<Option<Self>, ConfigError> {
         // Step 1: Environment variable override
-        if let Some(path) = env_override(kind) {
-            if path.exists() {
-                let config = load_config_from_path(&path, kind)?;
-                return Ok(Some(config));
-            }
+        if let Some(path) = env_override(kind)
+            && path.exists()
+        {
+            let config = load_config_from_path(&path, kind)?;
+            return Ok(Some(config));
         }
 
         // Step 2: Current directory
@@ -159,11 +176,11 @@ impl ConfigFile {
         }
 
         // Step 4: XDG config directory
-        if let Some(path) = xdg_config_path(kind) {
-            if path.exists() {
-                let config = load_config_from_path(&path, kind)?;
-                return Ok(Some(config));
-            }
+        if let Some(path) = xdg_config_path(kind)
+            && path.exists()
+        {
+            let config = load_config_from_path(&path, kind)?;
+            return Ok(Some(config));
         }
 
         // Not found - this is OK, return None
@@ -172,8 +189,9 @@ impl ConfigFile {
 
     /// Loads a configuration file from an explicit path.
     ///
-    /// Unlike `resolve`, this method requires an explicit path and does not perform
-    /// any searching. The config kind is inferred from the file name.
+    /// Unlike `resolve`, this method requires an explicit path and does not
+    /// perform any searching. The config kind is inferred from the file
+    /// name.
     ///
     /// # Arguments
     ///
@@ -182,14 +200,22 @@ impl ConfigFile {
     /// # Examples
     ///
     /// ```no_run
-    /// use operai_core::ConfigFile;
     /// use std::path::Path;
+    ///
+    /// use operai_core::ConfigFile;
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let config_file = ConfigFile::load(Path::new("custom/operai.toml"))?;
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(ConfigError)` if:
+    /// - The file cannot be read
+    /// - The file cannot be parsed as TOML
+    /// - The file name is not a recognized config file type
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let kind = infer_kind_from_path(path)?;
         load_config_from_path(path, kind)
@@ -199,7 +225,7 @@ impl ConfigFile {
     pub fn as_project(&self) -> Option<&Config> {
         match self {
             ConfigFile::Project(config) => Some(config),
-            _ => None,
+            ConfigFile::Credentials(_) => None,
         }
     }
 
@@ -207,7 +233,7 @@ impl ConfigFile {
     pub fn as_credentials(&self) -> Option<&CredentialsConfig> {
         match self {
             ConfigFile::Credentials(config) => Some(config),
-            _ => None,
+            ConfigFile::Project(_) => None,
         }
     }
 
@@ -215,7 +241,7 @@ impl ConfigFile {
     pub fn into_project(self) -> Option<Config> {
         match self {
             ConfigFile::Project(config) => Some(config),
-            _ => None,
+            ConfigFile::Credentials(_) => None,
         }
     }
 
@@ -223,7 +249,7 @@ impl ConfigFile {
     pub fn into_credentials(self) -> Option<CredentialsConfig> {
         match self {
             ConfigFile::Credentials(config) => Some(config),
-            _ => None,
+            ConfigFile::Project(_) => None,
         }
     }
 
@@ -231,11 +257,9 @@ impl ConfigFile {
     pub fn path(&self) -> PathBuf {
         match self {
             ConfigFile::Project(_) => PathBuf::from("operai.toml"),
-            ConfigFile::Credentials(_) => {
-                dirs::config_dir()
-                    .unwrap_or_else(|| PathBuf::from("~/.config"))
-                    .join("operai/credentials.toml")
-            }
+            ConfigFile::Credentials(_) => dirs::config_dir()
+                .unwrap_or_else(|| PathBuf::from("~/.config"))
+                .join("operai/credentials.toml"),
         }
     }
 }
@@ -243,7 +267,8 @@ impl ConfigFile {
 /// Project configuration from `operai.toml`.
 ///
 /// This is the main configuration file for an Operai project, specifying tools,
-/// policies, and project-specific settings. This is what most users work with directly.
+/// policies, and project-specific settings. This is what most users work with
+/// directly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// List of tool configurations.
@@ -256,13 +281,15 @@ pub struct Config {
     /// List of policy configurations.
     ///
     /// Policies define rules for tool execution, evaluated before and/or after
-    /// tool invocations. Policies may be defined inline or referenced via file paths.
+    /// tool invocations. Policies may be defined inline or referenced via file
+    /// paths.
     #[serde(default)]
     pub policies: Vec<PolicyConfig>,
 
     /// Project-specific embedding configuration.
     ///
-    /// This optional section allows overriding embedding settings for this project.
+    /// This optional section allows overriding embedding settings for this
+    /// project.
     pub embedding: Option<ProjectEmbeddingConfig>,
 
     /// Arbitrary configuration data.
@@ -281,10 +308,16 @@ impl Config {
     /// # Arguments
     ///
     /// * `path` - Path to the TOML project config file
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(ConfigError)` if:
+    /// - The file cannot be read (returns `NotFound` variant)
+    /// - The file cannot be parsed as TOML
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let path = path.as_ref();
-        let contents = fs::read_to_string(path)
-            .map_err(|_e| ConfigError::NotFound(path.to_path_buf()))?;
+        let contents =
+            fs::read_to_string(path).map_err(|_e| ConfigError::NotFound(path.to_path_buf()))?;
 
         let config: Config = toml::from_str(&contents)?;
         Ok(config)
@@ -292,8 +325,15 @@ impl Config {
 
     /// Loads project config using the unified resolution algorithm.
     ///
-    /// This is a convenience method that calls `ConfigFile::resolve(ConfigKind::Project)`
-    /// and extracts the config.
+    /// This is a convenience method that calls
+    /// `ConfigFile::resolve(ConfigKind::Project)` and extracts the config.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(ConfigError)` if:
+    /// - An environment variable path cannot be read
+    /// - A found config file cannot be read
+    /// - A found config file cannot be parsed
     pub fn load_resolved() -> Result<Option<Self>, ConfigError> {
         match ConfigFile::resolve(ConfigKind::Project)? {
             Some(ConfigFile::Project(config)) => Ok(Some(config)),
@@ -318,7 +358,8 @@ impl Config {
 
     /// Returns an iterator over only the enabled tools in the config.
     ///
-    /// This filters the `tools` list to return only tools where `enabled` is `true`.
+    /// This filters the `tools` list to return only tools where `enabled` is
+    /// `true`.
     ///
     /// # Returns
     ///
@@ -332,10 +373,10 @@ impl Config {
     ///
     /// This method processes the policy configurations in the config:
     ///
-    /// - For policies with a `path` field, loads the policy from the external file
-    ///   (relative to the config directory)
-    /// - For inline policies (with `name`, `version`, `context`, `effects` fields),
-    ///   constructs a `Policy` directly from the configuration
+    /// - For policies with a `path` field, loads the policy from the external
+    ///   file (relative to the config directory)
+    /// - For inline policies (with `name`, `version`, `context`, `effects`
+    ///   fields), constructs a `Policy` directly from the configuration
     ///
     /// # Parameters
     ///
@@ -345,6 +386,13 @@ impl Config {
     /// # Returns
     ///
     /// Returns `Ok(Vec<Policy>)` containing all resolved policies.
+    /// Returns `Err(ConfigError)` if:
+    /// - An external policy file cannot be read
+    /// - An external policy file fails to parse
+    /// - An inline policy is missing required fields (e.g., `name`)
+    ///
+    /// # Errors
+    ///
     /// Returns `Err(ConfigError)` if:
     /// - An external policy file cannot be read
     /// - An external policy file fails to parse
@@ -392,13 +440,21 @@ impl Config {
 pub struct CredentialsConfig {
     /// Map of provider name -> credential fields.
     ///
-    /// Each provider can have multiple credential fields (e.g., api_key, secret, etc.)
+    /// Each provider can have multiple credential fields (e.g., `api_key`,
+    /// secret, etc.)
     #[serde(default)]
     pub credentials: HashMap<String, HashMap<String, String>>,
 }
 
 impl CredentialsConfig {
     /// Loads credentials from the default location using unified resolution.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(ConfigError)` if:
+    /// - An environment variable path cannot be read
+    /// - A found config file cannot be read
+    /// - A found config file cannot be parsed
     pub fn load_resolved() -> Result<Option<Self>, ConfigError> {
         match ConfigFile::resolve(ConfigKind::Credentials)? {
             Some(ConfigFile::Credentials(config)) => Ok(Some(config)),
@@ -486,7 +542,7 @@ pub struct PolicyConfig {
 pub struct ProjectEmbeddingConfig {
     /// Embedding type: "local" or "remote".
     ///
-    /// - "local" uses local models via embed_anything (default)
+    /// - "local" uses local models via `embed_anything` (default)
     /// - "remote" uses cloud API endpoints
     #[serde(default = "default_embedding_type")]
     pub r#type: String,
@@ -498,8 +554,9 @@ pub struct ProjectEmbeddingConfig {
 
     /// Model name or identifier.
     ///
-    /// For local embeddings: Hugging Face model ID or alias (e.g., "nomic-embed-text-v1.5")
-    /// For remote embeddings: Model identifier for the provider (e.g., "text-embedding-3-small")
+    /// For local embeddings: Hugging Face model ID or alias (e.g.,
+    /// "nomic-embed-text-v1.5") For remote embeddings: Model identifier for
+    /// the provider (e.g., "text-embedding-3-small")
     pub model: Option<String>,
 }
 
@@ -513,16 +570,12 @@ fn default_embedding_type() -> String {
 /// Gets environment variable override for a config kind.
 fn env_override(kind: ConfigKind) -> Option<PathBuf> {
     match kind {
-        ConfigKind::Project => {
-            std::env::var("OPERAI_PROJECT_CONFIG_PATH")
-                .ok()
-                .map(PathBuf::from)
-        }
-        ConfigKind::Credentials => {
-            std::env::var("OPERAI_CREDENTIALS_PATH")
-                .ok()
-                .map(PathBuf::from)
-        }
+        ConfigKind::Project => std::env::var("OPERAI_PROJECT_CONFIG_PATH")
+            .ok()
+            .map(PathBuf::from),
+        ConfigKind::Credentials => std::env::var("OPERAI_CREDENTIALS_PATH")
+            .ok()
+            .map(PathBuf::from),
     }
 }
 
@@ -579,17 +632,18 @@ fn infer_kind_from_path(path: &Path) -> Result<ConfigKind, ConfigError> {
         "operai.toml" => Ok(ConfigKind::Project),
         "credentials.toml" => Ok(ConfigKind::Credentials),
         _ => Err(ConfigError::Project(format!(
-            "Unknown config file type: {}",
-            file_name
+            "Unknown config file type: {file_name}"
         ))),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn test_resolve_project_config_from_current_dir() {
@@ -616,7 +670,10 @@ path = "target/release/libtest.dylib"
         let config = result.unwrap().unwrap();
         assert!(config.as_project().is_some());
         assert_eq!(config.as_project().unwrap().tools.len(), 1);
-        assert_eq!(config.as_project().unwrap().tools[0].name.as_ref().unwrap(), "test-tool");
+        assert_eq!(
+            config.as_project().unwrap().tools[0].name.as_ref().unwrap(),
+            "test-tool"
+        );
     }
 
     #[test]
@@ -719,10 +776,11 @@ path = "current.dylib"
         std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
-        // Note: This test may fail if there's an operai.toml in a parent directory of the temp dir
-        // In that case, the test will find that file instead of returning None
+        // Note: This test may fail if there's an operai.toml in a parent directory of
+        // the temp dir In that case, the test will find that file instead of
+        // returning None
         match result.unwrap() {
-            None => {/* Test passes - no config found */},
+            None => { /* Test passes - no config found */ }
             Some(config) => {
                 // If a config was found, verify it's not from the temp directory itself
                 // (it must be from a parent directory, which is expected behavior)

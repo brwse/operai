@@ -4,15 +4,15 @@
 //! - Optionally generates an embedding for the tool's codebase
 //! - Builds the tool in release mode using `cargo build --release`
 //!
-//! The build process generates an embedding file (`.brwse-embedding`) by default,
-//! which can be used for semantic search and code understanding. This step can be
-//! skipped with the `--skip-embed` flag.
+//! The build process generates an embedding file (`.brwse-embedding`) by
+//! default, which can be used for semantic search and code understanding. This
+//! step can be skipped with the `--skip-embed` flag.
 //!
 //! # Error Handling
 //!
-//! Embedding generation failures are non-fatal - the command will print a warning
-//! and continue with the cargo build. However, cargo build failures will terminate
-//! the command with an error.
+//! Embedding generation failures are non-fatal - the command will print a
+//! warning and continue with the cargo build. However, cargo build failures
+//! will terminate the command with an error.
 
 use std::{ffi::OsStr, path::PathBuf, process::Command};
 
@@ -20,8 +20,9 @@ use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
-use crate::embedding::{EmbeddingGenerator, write_embedding_file};
 use tracing::info;
+
+use crate::embedding::{EmbeddingGenerator, write_embedding_file};
 
 /// Command-line arguments for the build command.
 #[derive(Args)]
@@ -34,15 +35,16 @@ pub struct BuildArgs {
 
     /// Skip embedding generation.
     ///
-    /// When set to `true`, the build process will not generate an embedding file
-    /// and will proceed directly to the cargo build step.
+    /// When set to `true`, the build process will not generate an embedding
+    /// file and will proceed directly to the cargo build step.
     #[arg(long)]
     pub skip_embed: bool,
 
     /// Additional arguments to pass to `cargo build`.
     ///
     /// These arguments are passed through directly to cargo and can be used to
-    /// specify features, target, etc. They must appear after `--` on the command line.
+    /// specify features, target, etc. They must appear after `--` on the
+    /// command line.
     #[arg(last = true)]
     pub cargo_args: Vec<String>,
 }
@@ -71,7 +73,8 @@ pub async fn run(args: &BuildArgs, config: &operai_core::Config) -> Result<()> {
 /// This function is primarily used for testing to inject a fake cargo binary.
 /// It performs the following steps:
 ///
-/// 1. Determines the crate path (defaults to current directory if not specified)
+/// 1. Determines the crate path (defaults to current directory if not
+///    specified)
 /// 2. If `skip_embed` is false, attempts to generate an embedding:
 ///    - Uses the provided config to get embedding settings
 ///    - Creates an `EmbeddingGenerator` from the config
@@ -83,7 +86,8 @@ pub async fn run(args: &BuildArgs, config: &operai_core::Config) -> Result<()> {
 ///
 /// # Type Parameters
 ///
-/// * `P` - A type that can be converted to an OS string (e.g., `&str`, `PathBuf`)
+/// * `P` - A type that can be converted to an OS string (e.g., `&str`,
+///   `PathBuf`)
 ///
 /// # Arguments
 ///
@@ -220,7 +224,8 @@ mod tests {
         }
     }
 
-    /// RAII guard that creates a temporary directory and deletes it when dropped.
+    /// RAII guard that creates a temporary directory and deletes it when
+    /// dropped.
     ///
     /// The directory name includes:
     /// - The provided prefix
@@ -358,7 +363,8 @@ mod tests {
             crate_dir.join("Cargo.toml"),
             "[package]\nname = \"test\"\nversion = \"0.1.0\"\n",
         )?;
-        // Create an operai.toml with invalid embedding config to trigger embedding failure
+        // Create an operai.toml with invalid embedding config to trigger embedding
+        // failure
         fs::write(
             crate_dir.join("operai.toml"),
             "[embeddings]\ntype = \"invalid-type-that-does-not-exist\"\nmodel = \"some-model\"\n",

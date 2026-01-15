@@ -1,7 +1,8 @@
 //! Dynamic loader for Operai tool libraries.
 //!
-//! This module provides functionality for dynamically loading tool libraries from
-//! shared object files (.so, .dll, .dylib) using the Operai ABI. It handles:
+//! This module provides functionality for dynamically loading tool libraries
+//! from shared object files (.so, .dll, .dylib) using the Operai ABI. It
+//! handles:
 //!
 //! - Library loading with optional SHA256 checksum verification
 //! - ABI version compatibility checking
@@ -12,12 +13,14 @@
 //!
 //! Each loaded library follows this lifecycle:
 //!
-//! 1. **Load**: The shared object file is loaded from disk via [`ToolLibrary::load`]
+//! 1. **Load**: The shared object file is loaded from disk via
+//!    [`ToolLibrary::load`]
 //! 2. **Verify**: Optional checksum verification ensures integrity
 //! 3. **Validate**: ABI version is checked for compatibility
 //! 4. **Initialize**: [`ToolLibrary::init`] calls the tool's init function
 //! 5. **Use**: Tool functions can be invoked via the module reference
-//! 6. **Shutdown**: [`ToolLibrary::shutdown`] or Drop cleanup calls the tool's shutdown function
+//! 6. **Shutdown**: [`ToolLibrary::shutdown`] or Drop cleanup calls the tool's
+//!    shutdown function
 //!
 //! # Thread Safety
 //!
@@ -50,17 +53,20 @@ pub enum LoadError {
     #[error("failed to load library: {0}")]
     LibraryLoad(String),
 
-    /// The tool library's ABI version does not match the runtime's expected version.
+    /// The tool library's ABI version does not match the runtime's expected
+    /// version.
     ///
-    /// This occurs when the library was compiled against a different version of the
-    /// Operai ABI. The library must be recompiled with a compatible version.
+    /// This occurs when the library was compiled against a different version of
+    /// the Operai ABI. The library must be recompiled with a compatible
+    /// version.
     #[error("ABI version mismatch: expected {expected}, got {actual}")]
     AbiMismatch { expected: u32, actual: u32 },
 
     /// The tool library's initialization function returned an error.
     ///
     /// This occurs when the tool's `init` function returns anything other than
-    /// [`ToolResult::Ok`], indicating the tool failed to initialize its resources.
+    /// [`ToolResult::Ok`], indicating the tool failed to initialize its
+    /// resources.
     #[error("tool initialization failed")]
     InitFailed,
 
@@ -72,22 +78,25 @@ pub enum LoadError {
 
     /// SHA256 checksum verification failed.
     ///
-    /// This occurs when the computed checksum of the library file does not match
-    /// the expected checksum, indicating the file may be corrupted or tampered with.
+    /// This occurs when the computed checksum of the library file does not
+    /// match the expected checksum, indicating the file may be corrupted or
+    /// tampered with.
     #[error("checksum mismatch: expected {expected}, got {actual}")]
     ChecksumMismatch { expected: String, actual: String },
 }
 
 /// A dynamically loaded tool library.
 ///
-/// This type manages the lifecycle of a loaded tool library, including initialization,
-/// shutdown, and safe cleanup. It provides access to the underlying [`ToolModuleRef`]
-/// for invoking tool functions.
+/// This type manages the lifecycle of a loaded tool library, including
+/// initialization, shutdown, and safe cleanup. It provides access to the
+/// underlying [`ToolModuleRef`] for invoking tool functions.
 ///
 /// # Safety and Cleanup
 ///
-/// - Shutdown is idempotent: calling [`ToolLibrary::shutdown`] multiple times is safe
-/// - [`Drop`] implementation ensures cleanup even if shutdown is not explicitly called
+/// - Shutdown is idempotent: calling [`ToolLibrary::shutdown`] multiple times
+///   is safe
+/// - [`Drop`] implementation ensures cleanup even if shutdown is not explicitly
+///   called
 /// - Uses atomic operations for thread-safe shutdown state tracking
 ///
 /// # Example
@@ -131,8 +140,8 @@ impl ToolLibrary {
     /// # Parameters
     ///
     /// - `path`: Path to the shared object file (.so, .dll, .dylib)
-    /// - `checksum`: Optional SHA256 checksum to verify library integrity.
-    ///   If provided, the file's SHA256 digest must match exactly.
+    /// - `checksum`: Optional SHA256 checksum to verify library integrity. If
+    ///   provided, the file's SHA256 digest must match exactly.
     ///
     /// # Errors
     ///
@@ -146,8 +155,8 @@ impl ToolLibrary {
     ///
     /// ```no_run
     /// # use operai_core::ToolLibrary;
-    /// let library = ToolLibrary::load("./tools/tool.so", Some("abc123..."))
-    ///     .expect("Failed to load library");
+    /// let library =
+    ///     ToolLibrary::load("./tools/tool.so", Some("abc123...")).expect("Failed to load library");
     /// ```
     pub fn load(path: impl AsRef<Path>, checksum: Option<&str>) -> Result<Self, LoadError> {
         let path = path.as_ref();
@@ -201,8 +210,9 @@ impl ToolLibrary {
 
     /// Initializes the tool library with the provided runtime context.
     ///
-    /// This function calls the tool library's `init` function, passing the runtime
-    /// context that contains configuration and resources needed by the tool.
+    /// This function calls the tool library's `init` function, passing the
+    /// runtime context that contains configuration and resources needed by
+    /// the tool.
     ///
     /// # Parameters
     ///
@@ -230,8 +240,8 @@ impl ToolLibrary {
 
     /// Shuts down the tool library, releasing its resources.
     ///
-    /// This function calls the tool library's `shutdown` function to allow it to
-    /// release resources and perform cleanup operations.
+    /// This function calls the tool library's `shutdown` function to allow it
+    /// to release resources and perform cleanup operations.
     ///
     /// # Idempotency
     ///

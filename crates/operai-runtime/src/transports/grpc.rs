@@ -15,7 +15,8 @@
 //! # Credentials Format
 //!
 //! Credential headers use the format `x-credential-{provider}` where the value
-//! is a base64-encoded JSON object with a `values` field containing key-value pairs.
+//! is a base64-encoded JSON object with a `values` field containing key-value
+//! pairs.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -34,8 +35,9 @@ use crate::{
 
 /// gRPC service implementation for the Toolbox API.
 ///
-/// This service wraps a [`LocalRuntime`] and exposes it via the gRPC `Toolbox` protocol.
-/// It handles metadata extraction from request headers and credential parsing.
+/// This service wraps a [`LocalRuntime`] and exposes it via the gRPC `Toolbox`
+/// protocol. It handles metadata extraction from request headers and credential
+/// parsing.
 ///
 /// # Fields
 ///
@@ -45,7 +47,8 @@ pub struct ToolboxService {
 }
 
 impl ToolboxService {
-    /// Creates a new `ToolboxService` with the given tool registry and policy store.
+    /// Creates a new `ToolboxService` with the given tool registry and policy
+    /// store.
     ///
     /// # Arguments
     ///
@@ -96,8 +99,9 @@ impl ToolboxService {
 
     /// Extracts user credentials from gRPC request metadata headers.
     ///
-    /// Credentials are passed via headers with the format `x-credential-{provider}`.
-    /// Each header value must be a base64-encoded JSON object containing a `values` field.
+    /// Credentials are passed via headers with the format
+    /// `x-credential-{provider}`. Each header value must be a
+    /// base64-encoded JSON object containing a `values` field.
     ///
     /// # Example Header
     ///
@@ -112,8 +116,8 @@ impl ToolboxService {
     ///
     /// # Returns
     ///
-    /// A map of provider name to credential values. Invalid or malformed credential
-    /// headers are silently ignored (logged as warnings).
+    /// A map of provider name to credential values. Invalid or malformed
+    /// credential headers are silently ignored (logged as warnings).
     fn extract_credentials<T>(request: &Request<T>) -> HashMap<String, HashMap<String, String>> {
         #[derive(serde::Deserialize)]
         struct CredentialData {
@@ -155,7 +159,8 @@ impl Toolbox for ToolboxService {
     /// Lists all available tools in the registry.
     ///
     /// Supports pagination via `page_size` and `page_token` parameters.
-    /// Returns tools in a deterministic order with a `next_page_token` for pagination.
+    /// Returns tools in a deterministic order with a `next_page_token` for
+    /// pagination.
     #[instrument(skip(self, request), fields(page_size, page_token))]
     async fn list_tools(
         &self,
@@ -181,7 +186,7 @@ impl Toolbox for ToolboxService {
     /// Invokes a tool with the provided input and metadata.
     ///
     /// This method:
-    /// 1. Extracts request metadata (request_id, session_id, user_id)
+    /// 1. Extracts request metadata (`request_id`, `session_id`, `user_id`)
     /// 2. Parses user credentials from headers
     /// 3. Validates the tool name format
     /// 4. Enforces pre-call policy evaluation
@@ -189,8 +194,9 @@ impl Toolbox for ToolboxService {
     /// 6. Enforces post-call policy evaluation
     /// 7. Returns the tool output or error
     ///
-    /// Tool execution errors are returned in the response rather than as gRPC errors,
-    /// allowing the transport to succeed even when tool execution fails.
+    /// Tool execution errors are returned in the response rather than as gRPC
+    /// errors, allowing the transport to succeed even when tool execution
+    /// fails.
     #[instrument(skip(self, request), fields(tool_name))]
     async fn call_tool(
         &self,
@@ -250,7 +256,8 @@ mod tests {
             .join("..")
     }
 
-    /// Returns the target directory and profile name from the test executable path.
+    /// Returns the target directory and profile name from the test executable
+    /// path.
     fn cargo_target_dir_and_profile() -> (PathBuf, String) {
         let exe_path = std::env::current_exe().expect("test executable path should be available");
         let deps_dir = exe_path
@@ -281,7 +288,8 @@ mod tests {
 
     /// Searches for the hello-world cdylib in the target directory.
     ///
-    /// Looks in both the profile directory directly and in the deps subdirectory.
+    /// Looks in both the profile directory directly and in the deps
+    /// subdirectory.
     fn find_hello_world_cdylib(target_dir: &Path, profile: &str) -> Option<PathBuf> {
         let file_name = expected_hello_world_cdylib_file_name();
         let profile_dir = target_dir.join(profile);
@@ -377,7 +385,8 @@ mod tests {
             .unwrap_or_else(|| panic!("missing output field `{field}`"))
     }
 
-    /// Helper to extract a string field from a protobuf Struct for test assertions.
+    /// Helper to extract a string field from a protobuf Struct for test
+    /// assertions.
     fn output_string(output: &prost_types::Struct, field: &str) -> String {
         match &output_struct_field(output, field).kind {
             Some(prost_types::value::Kind::StringValue(s)) => s.clone(),
@@ -385,7 +394,8 @@ mod tests {
         }
     }
 
-    /// Helper to extract a number field from a protobuf Struct for test assertions.
+    /// Helper to extract a number field from a protobuf Struct for test
+    /// assertions.
     fn output_number(output: &prost_types::Struct, field: &str) -> f64 {
         match &output_struct_field(output, field).kind {
             Some(prost_types::value::Kind::NumberValue(n)) => *n,

@@ -424,9 +424,8 @@ fn resolve_tool_path(tool: &operai_core::ToolConfig, config_dir: &Path) -> Optio
         let path = PathBuf::from(path);
         if path.is_absolute() {
             return Some(path);
-        } else {
-            return Some(config_dir.join(path));
         }
+        return Some(config_dir.join(path));
     }
 
     // 2. Name-based resolution - search in configured directories
@@ -702,7 +701,7 @@ mod tests {
         // Create a config in temp directory that uses name-based resolution
         let config_path = temp_config_path();
         let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
-        let contents = format!("[[tools]]\nname = \"hello_world\"\nenabled = true\n");
+        let contents = "[[tools]]\nname = \"hello_world\"\nenabled = true\n".to_string();
         std::fs::write(&config_path, contents).expect("write config");
 
         // Create target/release structure in config dir for testing

@@ -1,7 +1,7 @@
 //! Tool invocation CLI command.
 //!
-//! This module implements the `cargo operai call` command, which invokes a remote tool
-//! via a gRPC toolbox server. It handles:
+//! This module implements the `cargo operai call` command, which invokes a
+//! remote tool via a gRPC toolbox server. It handles:
 //! - Parsing tool invocation arguments
 //! - Loading credentials from files or CLI arguments
 //! - Converting between JSON and Protocol Buffer Struct formats
@@ -20,7 +20,8 @@ pub struct CallArgs {
     /// Identifier of the tool to call (e.g., "my-tool" or "namespace/my-tool")
     pub tool_id: String,
 
-    /// Input data for the tool as a JSON string, or "@" followed by a file path to read JSON from
+    /// Input data for the tool as a JSON string, or "@" followed by a file path
+    /// to read JSON from
     pub input: String,
 
     /// Address of the toolbox server (defaults to "localhost:50051")
@@ -29,9 +30,10 @@ pub struct CallArgs {
 
     /// Credential overrides in format "provider:key=value;key2=value2"
     ///
-    /// Supports multiple uses. CLI credentials take precedence over file credentials.
-    /// Values can reference environment variables with "env:VAR_NAME" syntax.
-    /// Special characters (= and ;) can be escaped with backslash.
+    /// Supports multiple uses. CLI credentials take precedence over file
+    /// credentials. Values can reference environment variables with
+    /// `env:VAR_NAME` syntax. Special characters (= and ;) can be escaped
+    /// with backslash.
     #[arg(short = 'C', long = "creds")]
     pub credentials: Vec<String>,
 
@@ -125,8 +127,8 @@ pub async fn run(args: &CallArgs) -> Result<()> {
 /// Converts a JSON value to a Protocol Buffer Struct.
 ///
 /// # Errors
-/// Returns an error if the JSON value is not an object, as Protocol Buffer Struct
-/// representations require object types at the top level.
+/// Returns an error if the JSON value is not an object, as Protocol Buffer
+/// Struct representations require object types at the top level.
 fn json_to_struct(value: serde_json::Value) -> Result<prost_types::Struct> {
     match value {
         serde_json::Value::Object(map) => {
@@ -190,7 +192,8 @@ fn struct_to_json(s: prost_types::Struct) -> serde_json::Value {
 /// Converts a Protocol Buffer Value to a JSON value.
 ///
 /// Handles all Protocol Buffer Value kinds and maps them to their corresponding
-/// JSON types. Numbers that cannot be represented as JSON numbers are converted to null.
+/// JSON types. Numbers that cannot be represented as JSON numbers are converted
+/// to null.
 fn prost_value_to_json(v: prost_types::Value) -> serde_json::Value {
     match v.kind {
         Some(prost_types::value::Kind::NullValue(_)) | None => serde_json::Value::Null,
@@ -209,7 +212,8 @@ fn prost_value_to_json(v: prost_types::Value) -> serde_json::Value {
 /// Loads and merges credentials from file and CLI arguments.
 ///
 /// Credentials are loaded in two phases:
-/// 1. From the credentials file (defaults to ~/.config/operai/credentials.toml if not specified)
+/// 1. From the credentials file (defaults to ~/.config/operai/credentials.toml
+///    if not specified)
 /// 2. From CLI arguments, which override file credentials
 ///
 /// Environment variable expansion is performed on values prefixed with "env:".
@@ -269,7 +273,8 @@ fn load_credentials(args: &CallArgs) -> Result<HashMap<String, HashMap<String, S
 /// Processes a credential value, expanding environment variable references.
 ///
 /// If the value starts with "env:", the rest of the string is treated as an
-/// environment variable name to look up. Otherwise, the value is returned as-is.
+/// environment variable name to look up. Otherwise, the value is returned
+/// as-is.
 ///
 /// # Errors
 /// Returns an error if an environment variable reference is made but the
@@ -285,8 +290,9 @@ fn process_value(value: &str) -> Result<String> {
 
 /// Parses a credential string in the format "provider:key=value;key2=value2".
 ///
-/// The provider name and keys are separated from values by '='. Multiple key-value
-/// pairs are separated by ';'. Special characters can be escaped with backslash.
+/// The provider name and keys are separated from values by '='. Multiple
+/// key-value pairs are separated by ';'. Special characters can be escaped with
+/// backslash.
 ///
 /// # Grammar
 /// ```text

@@ -1,4 +1,5 @@
-//! Session management for policy evaluation with optimistic concurrency control.
+//! Session management for policy evaluation with optimistic concurrency
+//! control.
 //!
 //! This module provides the storage and runtime infrastructure for maintaining
 //! policy evaluation state across multiple tool executions. Sessions track
@@ -7,9 +8,10 @@
 //!
 //! # Key Concepts
 //!
-//! - **Session Version**: Incremented on each save to detect concurrent modifications
-//! - **Optimistic Concurrency Control (OCC)**: Conflicts are detected via version checks
-//!   and resolved through retry loops
+//! - **Session Version**: Incremented on each save to detect concurrent
+//!   modifications
+//! - **Optimistic Concurrency Control (OCC)**: Conflicts are detected via
+//!   version checks and resolved through retry loops
 //! - **History**: Chronological record of tool executions for policy evaluation
 //!
 //! # Concurrency Model
@@ -17,7 +19,7 @@
 //! The session store uses optimistic locking:
 //! 1. Load session at version V
 //! 2. Modify session (keeping version V)
-//! 3. Save with version check (V == V_current)
+//! 3. Save with version check (V == `V_current`)
 //! 4. On conflict, retry from step 1
 //!
 //! # Example
@@ -71,20 +73,21 @@ pub struct PolicySession {
     pub version: u64,
     /// Context variables accessible to policy expressions.
     ///
-   /// This map is exposed as the `context` variable in CEL conditions and
+    /// This map is exposed as the `context` variable in CEL conditions and
     /// effect updates. Policies can read and modify these values.
     pub context: HashMap<String, JsonValue>,
     /// Chronological history of tool executions.
     ///
-   /// Events are appended during post-effects evaluation. The most recent
-    /// events (up to 5) are exposed as the `history` variable in CEL expressions.
+    /// Events are appended during post-effects evaluation. The most recent
+    /// events (up to 5) are exposed as the `history` variable in CEL
+    /// expressions.
     pub history: Vec<HistoryEvent>,
 }
 
 /// A record of a single tool execution attempt.
 ///
-/// History events are appended to session history during post-effects evaluation
-/// and are exposed to CEL expressions via the `history` variable.
+/// History events are appended to session history during post-effects
+/// evaluation and are exposed to CEL expressions via the `history` variable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEvent {
     /// Name/identifier of the tool that was executed.
@@ -125,7 +128,8 @@ pub enum SessionError {
     /// Internal lock poisoned, indicating concurrent access failure.
     ///
     /// This is a fatal error indicating the internal synchronization primitive
-    /// was corrupted. Usually caused by a thread panicking while holding the lock.
+    /// was corrupted. Usually caused by a thread panicking while holding the
+    /// lock.
     #[error("Lock poisoned")]
     LockPoisoned,
 }
@@ -136,7 +140,8 @@ use crate::PolicyError;
 ///
 /// Implementations must be thread-safe (`Send + Sync`) to support concurrent
 /// policy evaluations. The trait uses optimistic concurrency control: callers
-/// should handle `SessionError::Conflict` by reloading the session and retrying.
+/// should handle `SessionError::Conflict` by reloading the session and
+/// retrying.
 ///
 /// # Required Methods
 ///
@@ -153,9 +158,9 @@ pub trait PolicySessionStore: std::fmt::Debug + Send + Sync {
     /// Save a session to storage.
     ///
     /// Implementations must perform optimistic concurrency control by verifying
-    /// the session version matches the stored version before saving. If versions
-    /// don't match, this must return `SessionError::Conflict` to signal the
-    /// caller to retry.
+    /// the session version matches the stored version before saving. If
+    /// versions don't match, this must return `SessionError::Conflict` to
+    /// signal the caller to retry.
     async fn save(&self, session_id: &str, session: &PolicySession) -> Result<(), SessionError>;
 }
 
@@ -163,8 +168,9 @@ pub trait PolicySessionStore: std::fmt::Debug + Send + Sync {
 ///
 /// This implementation stores sessions in a `HashMap` protected by a `RwLock`.
 /// It's primarily useful for testing and single-process scenarios. For
-/// production use with multiple processes or persistence requirements, implement
-/// [`PolicySessionStore`] with a proper backend (database, file system, etc.).
+/// production use with multiple processes or persistence requirements,
+/// implement [`PolicySessionStore`] with a proper backend (database, file
+/// system, etc.).
 ///
 /// # Concurrency
 ///
@@ -225,8 +231,10 @@ impl PolicySessionStore for InMemoryPolicySessionStore {
 /// # Policy Evaluation
 ///
 /// Policies are evaluated in two stages:
-/// - **Pre-effects**: Before tool execution, can block execution or modify context
-/// - **Post-effects**: After tool execution, can modify context and append history
+/// - **Pre-effects**: Before tool execution, can block execution or modify
+///   context
+/// - **Post-effects**: After tool execution, can modify context and append
+///   history
 ///
 /// # Concurrency
 ///
@@ -253,6 +261,15 @@ impl PolicyStore {
     ///
     /// The policy is compiled and stored by name. If a policy with the same
     /// name already exists, it will be replaced.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the policy lock is poisoned (indicating a previous writer
+    /// thread panicked while holding the write lock).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(PolicyError)` if the policy fails to compile.
     pub fn register(&self, policy: Policy) -> Result<(), PolicyError> {
         let compiled = policy.compile()?;
         let mut map = self.policies.write().expect("lock poisoned");
@@ -261,6 +278,11 @@ impl PolicyStore {
     }
 
     /// Retrieve a registered policy by name.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the policy lock is poisoned (indicating a previous writer
+    /// thread panicked while holding the read lock).
     pub fn get(&self, name: &str) -> Option<Policy> {
         self.policies
             .read()
@@ -272,8 +294,8 @@ impl PolicyStore {
     /// Evaluate pre-effects for all registered policies.
     ///
     /// This method evaluates the "before" stage of all policies that match the
-    /// given tool. It handles concurrent modifications via optimistic concurrency
-    /// control, retrying up to 3 times on conflict.
+    /// given tool. It handles concurrent modifications via optimistic
+    /// concurrency control, retrying up to 3 times on conflict.
     ///
     /// # Behavior
     ///
@@ -284,8 +306,14 @@ impl PolicyStore {
     ///
     /// # Errors
     ///
-    /// Returns `PolicyError::GuardFailed` if any policy's guard condition fails.
-    /// Returns `PolicyError::EvalError` if session operations fail after retries.
+    /// Returns `PolicyError::GuardFailed` if any policy's guard condition
+    /// fails. Returns `PolicyError::EvalError` if session operations fail
+    /// after retries.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the policy lock is poisoned (indicating a previous writer
+    /// thread panicked while holding the read lock).
     pub async fn evaluate_pre_effects(
         &self,
         session_id: &str,
@@ -344,6 +372,16 @@ impl PolicyStore {
     /// - Appends a history event for the tool execution
     /// - Saves the session (always, to persist history)
     /// - Retries up to 3 times on conflict
+    ///
+    /// # Panics
+    ///
+    /// Panics if the policy lock is poisoned (indicating a previous writer
+    /// thread panicked while holding the read lock).
+    ///
+    /// # Errors
+    ///
+    /// Returns `PolicyError::EvalError` if session operations fail after
+    /// retries.
     pub async fn evaluate_post_effects(
         &self,
         session_id: &str,

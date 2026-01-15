@@ -53,7 +53,8 @@ pub(crate) mod testing {
     /// Acquires an asynchronous test lock.
     ///
     /// This provides a static mutex for synchronizing async tests that need to
-    /// prevent concurrent execution. Unlike [`test_lock`], this uses async locking.
+    /// prevent concurrent execution. Unlike [`test_lock`], this uses async
+    /// locking.
     ///
     /// # Returns
     ///
@@ -157,8 +158,8 @@ async fn main() -> Result<()> {
     let Cargo::Operai(args) = Cargo::parse();
 
     // Load project config once to share across subcommands
-    let config = operai_core::Config::load("operai.toml")
-        .unwrap_or_else(|_| operai_core::Config::empty());
+    let config =
+        operai_core::Config::load("operai.toml").unwrap_or_else(|_| operai_core::Config::empty());
 
     match &args.command {
         Command::New(args) => commands::new::run(args),
@@ -179,12 +180,13 @@ mod tests {
 
     /// Helper function to parse command-line arguments and extract the Command.
     ///
-    /// This utility is used throughout the test suite to verify that CLI arguments
-    /// are parsed correctly.
+    /// This utility is used throughout the test suite to verify that CLI
+    /// arguments are parsed correctly.
     ///
     /// # Arguments
     ///
-    /// * `argv` - Command-line arguments (e.g., `&["cargo", "operai", "new", "my-tool"]`)
+    /// * `argv` - Command-line arguments (e.g., `&["cargo", "operai", "new",
+    ///   "my-tool"]`)
     ///
     /// # Returns
     ///

@@ -1,14 +1,16 @@
 //! Core types and functionality for the Operai toolkit runtime.
 //!
 //! This crate provides the foundational infrastructure for dynamically loading,
-//! managing, and executing tools through a plugin-based architecture. It handles
-//! tool lifecycles, policy enforcement, and config-based configuration.
+//! managing, and executing tools through a plugin-based architecture. It
+//! handles tool lifecycles, policy enforcement, and config-based configuration.
 //!
 //! # Key Components
 //!
-//! - **Tool Loading**: Dynamic library loading via [`ToolLibrary`] with ABI version checking
+//! - **Tool Loading**: Dynamic library loading via [`ToolLibrary`] with ABI
+//!   version checking
 //! - **Tool Registry**: Centralized tool management through [`ToolRegistry`]
-//! - **Policy System**: CEL-based policy evaluation for controlling tool execution
+//! - **Policy System**: CEL-based policy evaluation for controlling tool
+//!   execution
 //! - **Config**: TOML-based configuration for tools and policies
 //!
 //! # Example
@@ -40,22 +42,16 @@
 //!
 //! The tool registry has two phases of operation:
 //!
-//! **Loading phase**: [`ToolRegistry::load_library`] requires `&mut self` and is not
-//! thread-safe. Load all tools before wrapping the registry in `Arc`.
+//! **Loading phase**: [`ToolRegistry::load_library`] requires `&mut self` and
+//! is not thread-safe. Load all tools before wrapping the registry in `Arc`.
 //!
 //! **Execution phase**: Once wrapped in `std::sync::Arc`, the registry supports
-//! concurrent queries ([`get`], [`list`], [`search`]). Tool handles use interior
-//! `Arc` wrapping for safe concurrent invocation.
+//! concurrent queries ([`get`], [`list`], [`search`]). Tool handles use
+//! interior `Arc` wrapping for safe concurrent invocation.
 
 mod config;
 mod loader;
 mod tool;
-
-/// Tool loading and lifecycle management.
-///
-/// Provides [`ToolLibrary`] for loading tools from dynamic libraries with
-/// ABI validation and optional checksum verification.
-pub use loader::{LoadError, ToolLibrary};
 
 /// Unified configuration system.
 ///
@@ -67,7 +63,11 @@ pub use loader::{LoadError, ToolLibrary};
 pub use config::{
     Config, ConfigError, ConfigFile, ConfigKind, CredentialsConfig, PolicyConfig, ToolConfig,
 };
-
+/// Tool loading and lifecycle management.
+///
+/// Provides [`ToolLibrary`] for loading tools from dynamic libraries with
+/// ABI validation and optional checksum verification.
+pub use loader::{LoadError, ToolLibrary};
 /// Tool registry and invocation.
 ///
 /// Core runtime infrastructure including [`ToolRegistry`] for managing tools,

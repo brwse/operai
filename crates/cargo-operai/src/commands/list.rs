@@ -58,19 +58,22 @@ fn truncate_description(description: &str) -> String {
 /// the remote toolbox server.
 #[derive(Args)]
 pub struct ListArgs {
-    /// Address of the toolbox server to connect to (e.g., "http://127.0.0.1:50051")
+    /// Address of the toolbox server to connect to (e.g., `<http://127.0.0.1:50051>`)
     #[arg(short, long, default_value = "http://127.0.0.1:50051")]
     pub server: String,
 
-    /// Output format: "table" for human-readable table or "json" for machine-readable JSON
+    /// Output format: "table" for human-readable table or "json" for
+    /// machine-readable JSON
     #[arg(short, long, default_value = "table")]
     pub format: String,
 }
 
-/// Executes the list command to retrieve and display tools from a toolbox server.
+/// Executes the list command to retrieve and display tools from a toolbox
+/// server.
 ///
-/// This function connects to the remote toolbox server, queries all available tools,
-/// and outputs them in either a human-readable table format or machine-readable JSON.
+/// This function connects to the remote toolbox server, queries all available
+/// tools, and outputs them in either a human-readable table format or
+/// machine-readable JSON.
 ///
 /// # Arguments
 ///
@@ -85,8 +88,10 @@ pub struct ListArgs {
 ///
 /// # Output Formats
 ///
-/// - **table**: Prints a formatted table with columns for tool ID, name, and description
-/// - **json**: Prints a JSON array with complete tool information including schemas
+/// - **table**: Prints a formatted table with columns for tool ID, name, and
+///   description
+/// - **json**: Prints a JSON array with complete tool information including
+///   schemas
 pub async fn run(args: &ListArgs) -> Result<()> {
     let mut client = ToolboxClient::connect(args.server.clone())
         .await
@@ -145,7 +150,8 @@ pub async fn run(args: &ListArgs) -> Result<()> {
 /// Converts a protobuf Tool message to a JSON value.
 ///
 /// This transforms the tool's protobuf representation into a more idiomatic
-/// JSON structure with camelCase keys for better compatibility with JSON conventions.
+/// JSON structure with camelCase keys for better compatibility with JSON
+/// conventions.
 ///
 /// # Arguments
 ///
@@ -176,7 +182,7 @@ fn tool_to_json(tool: operai_runtime::proto::Tool) -> serde_json::Value {
 ///
 /// # Returns
 ///
-/// A JSON Value::Object containing the struct's fields with values converted
+/// A JSON `Value::Object` containing the struct's fields with values converted
 /// via `prost_value_to_json`.
 fn struct_to_json(s: prost_types::Struct) -> serde_json::Value {
     let map = s
@@ -187,7 +193,7 @@ fn struct_to_json(s: prost_types::Struct) -> serde_json::Value {
     serde_json::Value::Object(map)
 }
 
-/// Converts a protobuf Value to a serde_json Value.
+/// Converts a protobuf Value to a `serde_json` Value.
 ///
 /// Recursively handles all protobuf value types including null, number, string,
 /// boolean, struct, and list values.
@@ -198,8 +204,9 @@ fn struct_to_json(s: prost_types::Struct) -> serde_json::Value {
 ///
 /// # Returns
 ///
-/// The equivalent serde_json::Value. Note that numbers that cannot be
-/// represented as valid JSON numbers (e.g., NaN, infinity) are converted to null.
+/// The equivalent `serde_json::Value`. Note that numbers that cannot be
+/// represented as valid JSON numbers (e.g., NaN, infinity) are converted to
+/// null.
 fn prost_value_to_json(v: prost_types::Value) -> serde_json::Value {
     match v.kind {
         Some(prost_types::value::Kind::NullValue(_)) | None => serde_json::Value::Null,

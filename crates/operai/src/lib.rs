@@ -1,9 +1,9 @@
 //! # Operai Tool Framework
 //!
-//! This crate provides a framework for defining async tools that can be dynamically
-//! loaded and invoked through an FFI boundary. Tools are defined using the
-//! `#[tool]` attribute macro, which generates the necessary boilerplate for
-//! registration, serialization, and schema generation.
+//! This crate provides a framework for defining async tools that can be
+//! dynamically loaded and invoked through an FFI boundary. Tools are defined
+//! using the `#[tool]` attribute macro, which generates the necessary
+//! boilerplate for registration, serialization, and schema generation.
 //!
 //! ## Defining a Tool
 //!
@@ -35,7 +35,8 @@
 //! }
 //! ```
 //!
-//! The `Result` type is re-exported from `anyhow` and expands to `Result<T, anyhow::Error>`.
+//! The `Result` type is re-exported from `anyhow` and expands to `Result<T,
+//! anyhow::Error>`.
 //!
 //! ## Tool Module Entry Point
 //!
@@ -57,7 +58,8 @@
 //!
 //! ## Credentials
 //!
-//! Define credentials using the `define_system_credential!` and `define_user_credential!` macros:
+//! Define credentials using the `define_system_credential!` and
+//! `define_user_credential!` macros:
 //!
 //! ```ignore
 //! use operai::define_system_credential;
@@ -78,7 +80,8 @@
 //! ```
 //!
 //! Credentials come in two namespaces:
-//! - **System credentials**: Provider-level credentials configured by the operator
+//! - **System credentials**: Provider-level credentials configured by the
+//!   operator
 //! - **User credentials**: User-specific credentials for authentication
 //!
 //! ## Lifecycle Hooks

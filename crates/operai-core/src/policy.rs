@@ -8,9 +8,11 @@
 //! # Key Concepts
 //!
 //! - **Policy**: A collection of effects with shared context
-//! - **Effect**: A conditional action that applies to specific tools at a specific stage
+//! - **Effect**: A conditional action that applies to specific tools at a
+//!   specific stage
 //! - **Stage**: Before or after tool execution
-//! - **Compilation**: CEL expressions are compiled to Programs for efficient evaluation
+//! - **Compilation**: CEL expressions are compiled to Programs for efficient
+//!   evaluation
 //! - **Session**: Maintains context and history across policy evaluations
 //!
 //! # Example
@@ -60,7 +62,8 @@ pub enum PolicyStage {
     After,
 }
 
-/// A policy definition containing conditional effects for controlling tool execution.
+/// A policy definition containing conditional effects for controlling tool
+/// execution.
 ///
 /// Policies are evaluated against tool invocations to enforce guards and
 /// modify execution context. They use CEL (Common Expression Language) for
@@ -72,7 +75,8 @@ pub struct Policy {
     /// Version string for policy tracking and compatibility.
     pub version: String,
 
-    /// Initial context variables available to all CEL expressions in this policy.
+    /// Initial context variables available to all CEL expressions in this
+    /// policy.
     #[serde(default)]
     pub context: HashMap<String, JsonValue>,
 
@@ -95,7 +99,8 @@ pub struct Effect {
     #[serde(default)]
     pub stage: PolicyStage,
 
-    /// CEL condition expression that must evaluate to `true` for this effect to apply.
+    /// CEL condition expression that must evaluate to `true` for this effect to
+    /// apply.
     #[serde(rename = "when")]
     pub condition: String,
 
@@ -169,7 +174,8 @@ impl Policy {
     ///
     /// # Errors
     ///
-    /// Returns `PolicyError::CompilationError` if any CEL expression fails to parse.
+    /// Returns `PolicyError::CompilationError` if any CEL expression fails to
+    /// parse.
     pub fn compile(self) -> Result<CompiledPolicy, PolicyError> {
         let mut compiled_effects = Vec::new();
         for effect in &self.effects {
@@ -207,7 +213,7 @@ impl CompiledPolicy {
     ///
     /// # CEL Context Variables
     ///
-    /// - `context`: Policy session context (HashMap)
+    /// - `context`: Policy session context (`HashMap`)
     /// - `history`: Recent tool execution history (last 5 events)
     /// - `input`: Tool input JSON
     /// - `tool`: Map with `name` key containing the tool name
@@ -221,7 +227,8 @@ impl CompiledPolicy {
     /// # Errors
     ///
     /// - Returns `PolicyError::EvalError` if CEL evaluation fails
-    /// - Returns `PolicyError::GuardFailed` if a guard condition fails with a fail message
+    /// - Returns `PolicyError::GuardFailed` if a guard condition fails with a
+    ///   fail message
     pub fn evaluate_pre_effects(
         &self,
         state: &mut PolicySession,
@@ -290,7 +297,7 @@ impl CompiledPolicy {
     ///
     /// # CEL Context Variables
     ///
-    /// - `context`: Policy session context (HashMap)
+    /// - `context`: Policy session context (`HashMap`)
     /// - `history`: Recent tool execution history (last 5 events)
     /// - `input`: Tool input JSON
     /// - `tool`: Map with `name` key containing the tool name
@@ -387,7 +394,8 @@ impl CompiledPolicy {
 /// # Patterns
 ///
 /// - `"*"`: Matches all tools
-/// - `"group.*"`: Matches `group` and any tool with a `group.` prefix (e.g., `group.subtool`)
+/// - `"group.*"`: Matches `group` and any tool with a `group.` prefix (e.g.,
+///   `group.subtool`)
 /// - `"exact_name"`: Matches only the exact tool name
 fn matches_tool_pattern(pattern: &str, tool_id: &str) -> bool {
     if pattern == "*" {
@@ -427,7 +435,7 @@ fn to_cel_json(v: &JsonValue) -> Value {
     }
 }
 
-/// Converts a JSON HashMap to a CEL Map value.
+/// Converts a JSON `HashMap` to a CEL Map value.
 fn to_cel_value(map: &HashMap<String, JsonValue>) -> Value {
     let mut m = HashMap::new();
     for (k, v) in map {

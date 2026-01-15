@@ -20,7 +20,7 @@ pub struct DescribeArgs {
 
     /// The gRPC server address to connect to.
     ///
-    /// Defaults to "http://localhost:50051" if not provided.
+    /// Defaults to `<http://localhost:50051>` if not provided.
     #[arg(short, long, default_value = "http://localhost:50051")]
     pub server: String,
 }

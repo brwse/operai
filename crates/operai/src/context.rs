@@ -1,24 +1,27 @@
 //! Request context and credential management for tool invocations.
 //!
-//! This module provides the [`Context`] struct, which encapsulates metadata and credentials
-//! for a single tool invocation. It converts between the FFI-compatible [`CallContext`] from
-//! `operai_abi` and a more ergonomic Rust API.
+//! This module provides the [`Context`] struct, which encapsulates metadata and
+//! credentials for a single tool invocation. It converts between the
+//! FFI-compatible [`CallContext`] from `operai_abi` and a more ergonomic Rust
+//! API.
 //!
 //! # Credentials
 //!
 //! Credentials are organized into two separate namespaces:
 //!
-//! - **System credentials**: Provider-level credentials configured by the operator
+//! - **System credentials**: Provider-level credentials configured by the
+//!   operator
 //! - **User credentials**: User-specific credentials for authentication
 //!
-//! Both namespaces are independent, allowing the same credential name to exist in both
-//! with different values.
+//! Both namespaces are independent, allowing the same credential name to exist
+//! in both with different values.
 //!
 //! # Deserialization
 //!
-//! Credentials are stored as `HashMap<String, String>` and can be deserialized into any
-//! type that implements `DeserializeOwned`. The deserialization uses JSON as an intermediate
-//! format, converting the HashMap to a JSON object and then to the target type.
+//! Credentials are stored as `HashMap<String, String>` and can be deserialized
+//! into any type that implements `DeserializeOwned`. The deserialization uses
+//! JSON as an intermediate format, converting the `HashMap` to a JSON object
+//! and then to the target type.
 
 use std::collections::HashMap;
 
@@ -44,9 +47,9 @@ pub struct Context {
 impl Context {
     /// Creates a `Context` from an FFI [`CallContext`].
     ///
-    /// This is an internal method used by the runtime to convert the FFI-compatible
-    /// context into the high-level Rust API. It deserializes credentials from
-    /// rkyv-encoded binary format.
+    /// This is an internal method used by the runtime to convert the
+    /// FFI-compatible context into the high-level Rust API. It deserializes
+    /// credentials from rkyv-encoded binary format.
     ///
     /// # Errors
     ///
@@ -134,13 +137,14 @@ impl Context {
     ///
     /// # Type Parameters
     ///
-    /// * `T` - The target type to deserialize the credential into. Must implement
-    ///        `DeserializeOwned`.
+    /// * `T` - The target type to deserialize the credential into. Must
+    ///   implement `DeserializeOwned`.
     ///
     /// # Errors
     ///
-    /// Returns [`CredentialError::NotFound`] if the credential doesn't exist, or
-    /// [`CredentialError::DeserializationError`] if deserialization fails.
+    /// Returns [`CredentialError::NotFound`] if the credential doesn't exist,
+    /// or [`CredentialError::DeserializationError`] if deserialization
+    /// fails.
     pub fn system_credential<T: DeserializeOwned>(&self, name: &str) -> Result<T, CredentialError> {
         Self::get_credential(&self.system_credentials, name)
     }
@@ -149,13 +153,14 @@ impl Context {
     ///
     /// # Type Parameters
     ///
-    /// * `T` - The target type to deserialize the credential into. Must implement
-    ///        `DeserializeOwned`.
+    /// * `T` - The target type to deserialize the credential into. Must
+    ///   implement `DeserializeOwned`.
     ///
     /// # Errors
     ///
-    /// Returns [`CredentialError::NotFound`] if the credential doesn't exist, or
-    /// [`CredentialError::DeserializationError`] if deserialization fails.
+    /// Returns [`CredentialError::NotFound`] if the credential doesn't exist,
+    /// or [`CredentialError::DeserializationError`] if deserialization
+    /// fails.
     pub fn user_credential<T: DeserializeOwned>(&self, name: &str) -> Result<T, CredentialError> {
         Self::get_credential(&self.user_credentials, name)
     }
@@ -175,7 +180,8 @@ impl Context {
 
     /// Builder method: adds a system credential to this context.
     ///
-    /// Consumes `self` and returns the modified context, enabling chained calls.
+    /// Consumes `self` and returns the modified context, enabling chained
+    /// calls.
     #[must_use]
     pub fn with_system_credential(mut self, name: &str, values: HashMap<String, String>) -> Self {
         self.system_credentials.insert(name.to_string(), values);
@@ -184,7 +190,8 @@ impl Context {
 
     /// Builder method: adds a user credential to this context.
     ///
-    /// Consumes `self` and returns the modified context, enabling chained calls.
+    /// Consumes `self` and returns the modified context, enabling chained
+    /// calls.
     #[must_use]
     pub fn with_user_credential(mut self, name: &str, values: HashMap<String, String>) -> Self {
         self.user_credentials.insert(name.to_string(), values);

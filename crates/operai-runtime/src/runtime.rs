@@ -1,21 +1,23 @@
 //! Runtime implementations for tool execution.
 //!
-//! This module provides the core runtime abstractions for executing tools either
-//! locally (via dynamic loading) or remotely (via gRPC). The runtime handles tool
-//! discovery, invocation, policy enforcement, and metadata management.
+//! This module provides the core runtime abstractions for executing tools
+//! either locally (via dynamic loading) or remotely (via gRPC). The runtime
+//! handles tool discovery, invocation, policy enforcement, and metadata
+//! management.
 //!
 //! # Architecture
 //!
 //! The module provides two runtime implementations:
 //!
-//! - **[`LocalRuntime`]**: Executes tools locally by dynamically loading tool libraries
-//!   and invoking them through the Operai ABI. Supports in-process tool execution with
-//!   full policy enforcement.
-//! - **[`RemoteRuntime`]**: Connects to a remote Toolbox service over gRPC, forwarding
-//!   tool calls to a remote runtime. Useful for distributed deployments.
+//! - **[`LocalRuntime`]**: Executes tools locally by dynamically loading tool
+//!   libraries and invoking them through the Operai ABI. Supports in-process
+//!   tool execution with full policy enforcement.
+//! - **[`RemoteRuntime`]**: Connects to a remote Toolbox service over gRPC,
+//!   forwarding tool calls to a remote runtime. Useful for distributed
+//!   deployments.
 //!
-//! - **[`Runtime`]**: A unified enum that wraps both local and remote implementations,
-//!   providing a polymorphic interface for tool operations.
+//! - **[`Runtime`]**: A unified enum that wraps both local and remote
+//!   implementations, providing a polymorphic interface for tool operations.
 //!
 //! # Metadata
 //!
@@ -50,8 +52,9 @@ use crate::proto::{
 
 /// Metadata associated with a tool invocation request.
 ///
-/// This struct carries context information for tool calls, including identifiers
-/// for tracing, user authorization, and credentials for accessing external services.
+/// This struct carries context information for tool calls, including
+/// identifiers for tracing, user authorization, and credentials for accessing
+/// external services.
 #[derive(Debug, Clone, Default)]
 pub struct CallMetadata {
     /// Unique identifier for this request (useful for tracing and logging).
@@ -67,9 +70,9 @@ pub struct CallMetadata {
 
 /// Runtime that can execute tools either locally or remotely.
 ///
-/// This enum provides a unified interface to either a local runtime (which executes
-/// tools in-process) or a remote runtime (which forwards calls over gRPC). Use this
-/// when you need to support both deployment modes.
+/// This enum provides a unified interface to either a local runtime (which
+/// executes tools in-process) or a remote runtime (which forwards calls over
+/// gRPC). Use this when you need to support both deployment modes.
 #[derive(Clone)]
 pub enum Runtime {
     /// Local runtime that executes tools in-process.
@@ -83,6 +86,11 @@ impl Runtime {
     ///
     /// Delegates to the underlying local or remote runtime to retrieve the list
     /// of registered tools.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Status` if the underlying runtime fails to retrieve the tool
+    /// list.
     pub async fn list_tools(&self, request: ListToolsRequest) -> Result<ListToolsResponse, Status> {
         match self {
             Self::Local(runtime) => runtime.list_tools(request).await,
@@ -94,6 +102,10 @@ impl Runtime {
     ///
     /// Delegates to the underlying runtime to perform semantic search over tool
     /// descriptions and metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Status` if the underlying runtime fails to perform the search.
     pub async fn search_tools(
         &self,
         request: SearchToolsRequest,
@@ -108,6 +120,10 @@ impl Runtime {
     ///
     /// Delegates to the underlying runtime to execute the tool, enforcing
     /// policies and returning the result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Status` if the underlying runtime fails to execute the tool.
     pub async fn call_tool(
         &self,
         request: CallToolRequest,
@@ -122,9 +138,10 @@ impl Runtime {
 
 /// Local runtime that executes tools in-process.
 ///
-/// This runtime manages a registry of dynamically-loaded tool libraries and executes
-/// tool calls locally. It enforces policies through a [`PolicyStore`] before and after
-/// tool execution, and handles serialization/deserialization of inputs and outputs.
+/// This runtime manages a registry of dynamically-loaded tool libraries and
+/// executes tool calls locally. It enforces policies through a [`PolicyStore`]
+/// before and after tool execution, and handles serialization/deserialization
+/// of inputs and outputs.
 ///
 /// # Tool Execution Flow
 ///
@@ -140,7 +157,8 @@ impl Runtime {
 /// # Thread Safety
 ///
 /// The runtime can be safely shared across threads via `Arc`. Concurrent tool
-/// invocations are allowed, with each invocation tracked via an in-flight request guard.
+/// invocations are allowed, with each invocation tracked via an in-flight
+/// request guard.
 #[derive(Clone)]
 pub struct LocalRuntime {
     /// Registry of available tools.
@@ -223,7 +241,12 @@ impl LocalRuntime {
     ///
     /// - `page_size`: Maximum items per page (default: 100, max: 1000)
     /// - `page_token`: Offset to start from (parsed as `usize`, default: 0)
-    /// - Returns `next_page_token` for pagination (empty string indicates last page)
+    /// - Returns `next_page_token` for pagination (empty string indicates last
+    ///   page)
+    ///
+    /// # Errors
+    ///
+    /// This function currently never returns an error.
     pub async fn list_tools(&self, request: ListToolsRequest) -> Result<ListToolsResponse, Status> {
         let page_size: usize = if request.page_size <= 0 {
             100
@@ -260,8 +283,9 @@ impl LocalRuntime {
     ///
     /// # Errors
     ///
-    /// Returns `Status::invalid_argument` if neither `query_embedding` nor `query_text` is provided.
-    /// Returns `Status::invalid_argument` if `query_text` is provided but no search embedder is configured.
+    /// Returns `Status::invalid_argument` if neither `query_embedding` nor
+    /// `query_text` is provided. Returns `Status::invalid_argument` if
+    /// `query_text` is provided but no search embedder is configured.
     pub async fn search_tools(
         &self,
         request: SearchToolsRequest,
@@ -272,13 +296,19 @@ impl LocalRuntime {
             request.query_embedding
         } else if !request.query_text.is_empty() {
             // Use server-side embedding generation
-            let embedder = self.search_embedder.as_ref()
+            let embedder = self
+                .search_embedder
+                .as_ref()
                 .ok_or_else(|| Status::invalid_argument("search embedder not configured"))?;
 
-            embedder.embed_query(&request.query_text).await
+            embedder
+                .embed_query(&request.query_text)
+                .await
                 .map_err(|err| Status::invalid_argument(format!("failed to embed query: {err}")))?
         } else {
-            return Err(Status::invalid_argument("either query_embedding or query_text must be provided"));
+            return Err(Status::invalid_argument(
+                "either query_embedding or query_text must be provided",
+            ));
         };
 
         let page_size = if request.page_size <= 0 {
@@ -287,10 +317,7 @@ impl LocalRuntime {
             usize::try_from(request.page_size.min(100)).unwrap_or(100)
         };
 
-        info!(
-            embedding_dims = embedding.len(),
-            "Searching tools"
-        );
+        info!(embedding_dims = embedding.len(), "Searching tools");
 
         let search_results = self.registry.search(&embedding, page_size);
 
@@ -332,7 +359,8 @@ impl LocalRuntime {
     /// - `invalid_argument`: Tool name format is invalid
     /// - `not_found`: Tool does not exist in registry
     /// - `permission_denied`: Pre-call policy rejected the request
-    /// - `internal`: Policy evaluation error, serialization failure, or tool panic
+    /// - `internal`: Policy evaluation error, serialization failure, or tool
+    ///   panic
     pub async fn call_tool(
         &self,
         request: CallToolRequest,
@@ -473,12 +501,20 @@ impl RemoteRuntime {
     }
 
     /// Lists all available tools from the remote service.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Status` if the gRPC request fails.
     pub async fn list_tools(&self, request: ListToolsRequest) -> Result<ListToolsResponse, Status> {
         let response = self.client.clone().list_tools(request).await?.into_inner();
         Ok(response)
     }
 
     /// Searches for tools using semantic similarity via the remote service.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Status` if the gRPC request fails.
     pub async fn search_tools(
         &self,
         request: SearchToolsRequest,
@@ -495,6 +531,11 @@ impl RemoteRuntime {
     /// Invokes a tool by name via the remote service.
     ///
     /// Metadata is attached to the gRPC request as headers before sending.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Status` if the gRPC request fails or if invalid metadata is
+    /// provided.
     pub async fn call_tool(
         &self,
         request: CallToolRequest,
@@ -626,7 +667,8 @@ fn normalize_endpoint(endpoint: &str) -> String {
 /// - `x-request-id`: Request identifier
 /// - `x-session-id`: Session identifier
 /// - `x-user-id`: User identifier
-/// - `x-credential-{provider}`: Base64-encoded credential data for each provider
+/// - `x-credential-{provider}`: Base64-encoded credential data for each
+///   provider
 ///
 /// # Errors
 ///

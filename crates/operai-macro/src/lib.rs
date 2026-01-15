@@ -2,8 +2,9 @@
 
 //! # Operai Procedural Macros
 //!
-//! This crate provides procedural macros for defining Operai tools and credentials.
-//! It handles code generation for tool registration, lifecycle hooks, and credential management.
+//! This crate provides procedural macros for defining Operai tools and
+//! credentials. It handles code generation for tool registration, lifecycle
+//! hooks, and credential management.
 //!
 //! ## Main Macros
 //!
@@ -15,7 +16,8 @@
 //!
 //! ## Tool Definition
 //!
-//! Tools are defined using the `#[tool]` attribute with doc comments providing metadata:
+//! Tools are defined using the `#[tool]` attribute with doc comments providing
+//! metadata:
 //!
 //! ```ignore
 //! /// # Greet User
@@ -78,7 +80,8 @@ use syn::{
 
 /// Metadata extracted from a function's doc comments.
 ///
-/// Used by the `#[tool]` macro to populate tool metadata from structured documentation.
+/// Used by the `#[tool]` macro to populate tool metadata from structured
+/// documentation.
 struct DocCommentMetadata {
     /// Tool description (extracted from content after H1 heading)
     description: Option<String>,
@@ -207,8 +210,8 @@ fn extract_doc_metadata(attrs: &[Attribute]) -> Option<DocCommentMetadata> {
 
 /// Attribute macro for defining tool handler functions.
 ///
-/// This macro generates the necessary boilerplate for tool registration and invocation.
-/// The annotated function must:
+/// This macro generates the necessary boilerplate for tool registration and
+/// invocation. The annotated function must:
 /// - Be `async`
 /// - Take exactly 2 parameters: `(ctx: Context, input: Input)`
 /// - Return `Result<Output, Error>`
@@ -450,8 +453,8 @@ fn expand_init(func: &ItemFn) -> Result<proc_macro2::TokenStream> {
 
 /// Attribute macro for defining shutdown/cleanup functions.
 ///
-/// Annotates a synchronous function that runs when the tool library is unloaded.
-/// The function must:
+/// Annotates a synchronous function that runs when the tool library is
+/// unloaded. The function must:
 /// - Be synchronous (not `async`)
 /// - Take no parameters
 ///

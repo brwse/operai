@@ -1,19 +1,19 @@
 //! # Operai Tool ABI
 //!
-//! This crate defines the stable Application Binary Interface (ABI) for Operai tools.
-//! It enables dynamic loading and invocation of tool libraries across different versions
-//! of the Operai runtime.
+//! This crate defines the stable Application Binary Interface (ABI) for Operai
+//! tools. It enables dynamic loading and invocation of tool libraries across
+//! different versions of the Operai runtime.
 //!
 //! ## Architecture
 //!
-//! The ABI uses [`abi_stable`] to provide cross-version compatibility, allowing tools
-//! compiled against one version of the ABI to work with runtimes built against another
-//! version (within the same ABI major version).
+//! The ABI uses [`abi_stable`] to provide cross-version compatibility, allowing
+//! tools compiled against one version of the ABI to work with runtimes built
+//! against another version (within the same ABI major version).
 //!
 //! ## Tool Lifecycle
 //!
-//! Every tool library must implement the [`ToolModule`] interface, which defines three
-//! lifecycle operations:
+//! Every tool library must implement the [`ToolModule`] interface, which
+//! defines three lifecycle operations:
 //!
 //! 1. **Initialization**: `init()` is called once when the library is loaded
 //! 2. **Invocation**: `call()` is called for each tool execution request
@@ -21,22 +21,24 @@
 //!
 //! ## Thread Safety
 //!
-//! - The runtime guarantees that `init()` and `shutdown()` are called from a single thread
+//! - The runtime guarantees that `init()` and `shutdown()` are called from a
+//!   single thread
 //! - Multiple `call()` invocations may occur concurrently on different threads
 //! - Tool implementations must ensure their `call()` function is thread-safe
 //!
 //! ## ABI Versioning
 //!
-//! The current ABI version is defined by [`TOOL_ABI_VERSION`). All tool libraries
-//! must export a [`ToolMeta`] struct with the matching `abi_version` to be loaded.
+//! The current ABI version is defined by [`TOOL_ABI_VERSION`). All tool
+//! libraries must export a [`ToolMeta`] struct with the matching `abi_version`
+//! to be loaded.
 //!
 //! ## Example
 //!
 //! ```no_run
 //! # #![allow(dead_code)]
-//! use operai_abi::*;
 //! use abi_stable::std_types::RVec;
 //! use async_ffi::FfiFuture;
+//! use operai_abi::*;
 //!
 //! pub extern "C" fn init(args: InitArgs) -> FfiFuture<ToolResult> {
 //!     // Initialize tool resources
@@ -74,14 +76,15 @@ pub const TOOL_ABI_VERSION: u32 = 1;
 /// Result codes for tool operations.
 ///
 /// These codes are used across the ABI to indicate success or failure of
-/// initialization, calls, and other operations. The enum is marked as `#[non_exhaustive]`
-/// to allow adding new error codes in future ABI versions without breaking compatibility.
+/// initialization, calls, and other operations. The enum is marked as
+/// `#[non_exhaustive]` to allow adding new error codes in future ABI versions
+/// without breaking compatibility.
 ///
 /// # Representation
 ///
-/// The enum uses `#[repr(u8)]` for a stable wire format, ensuring it can be safely
-/// passed across FFI boundaries. Each variant has an explicit discriminant to maintain
-/// binary compatibility across ABI versions.
+/// The enum uses `#[repr(u8)]` for a stable wire format, ensuring it can be
+/// safely passed across FFI boundaries. Each variant has an explicit
+/// discriminant to maintain binary compatibility across ABI versions.
 #[repr(u8)]
 #[derive(StableAbi, Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -104,8 +107,9 @@ pub enum ToolResult {
 
 /// Metadata about a tool library.
 ///
-/// This struct is exported by every tool library and contains version information
-/// used by the runtime to verify compatibility before loading the library.
+/// This struct is exported by every tool library and contains version
+/// information used by the runtime to verify compatibility before loading the
+/// library.
 #[repr(C)]
 #[derive(StableAbi, Debug, Clone, Copy)]
 pub struct ToolMeta {
@@ -136,14 +140,15 @@ impl ToolMeta {
 
 /// Describes a tool's interface and capabilities.
 ///
-/// Each tool in a library must have a corresponding `ToolDescriptor` that describes
-/// its inputs, outputs, and metadata. This information is used by the runtime for
-/// validation, discovery, and tool selection.
+/// Each tool in a library must have a corresponding `ToolDescriptor` that
+/// describes its inputs, outputs, and metadata. This information is used by the
+/// runtime for validation, discovery, and tool selection.
 #[repr(C)]
 #[derive(StableAbi, Debug, Clone)]
 pub struct ToolDescriptor {
     /// Unique identifier for this tool (e.g., "greet").
-    /// Combined with the crate name to form a qualified ID: `{crate_name}.{id}`.
+    /// Combined with the crate name to form a qualified ID:
+    /// `{crate_name}.{id}`.
     pub id: RStr<'static>,
     /// Human-readable name of the tool.
     pub name: RStr<'static>,
@@ -233,7 +238,8 @@ impl CallResult {
     /// Creates an error result with a message.
     ///
     /// The message will be UTF-8 encoded into the output field.
-    /// The `result` parameter should be a specific error code (not `ToolResult::Ok`).
+    /// The `result` parameter should be a specific error code (not
+    /// `ToolResult::Ok`).
     #[must_use]
     pub fn error(result: ToolResult, message: &str) -> Self {
         Self {
@@ -315,7 +321,8 @@ pub type ToolShutdownFn = extern "C" fn();
 /// - `#[sabi(kind(Prefix))]`: Allows adding new fields in future versions
 /// - `#[sabi(missing_field(panic))]`: Panics if a required field is missing
 /// - `#[sabi(unsafe_opaque_field)]`: Marks function pointers as opaque
-/// - `#[sabi(last_prefix_field)]`: Marks the last field that can be added in the current version
+/// - `#[sabi(last_prefix_field)]`: Marks the last field that can be added in
+///   the current version
 #[repr(C)]
 #[derive(StableAbi)]
 #[sabi(kind(Prefix(prefix_ref = ToolModuleRef)))]
