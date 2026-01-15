@@ -4,16 +4,18 @@
 //! tools defined in an Operai config. The server supports gRPC reflection,
 //! health checks, and graceful shutdown.
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
-use operai_runtime::{RuntimeBuilder, proto, transports};
+use operai_runtime::{RuntimeBuilder, SearchEmbedder, proto, transports};
 use tokio::signal;
 use tonic::transport::Server;
 use tonic_health::ServingStatus;
 use tracing::info;
+
+use crate::embedding::EmbeddingGenerator;
 
 /// Command-line arguments for the serve command.
 #[derive(Args)]
@@ -31,12 +33,12 @@ pub struct ServeArgs {
 /// This is the main entry point for the serve command. It initializes the
 /// runtime from the config and starts a gRPC server with health checks and
 /// reflection.
-pub async fn run(args: &ServeArgs) -> Result<()> {
+pub async fn run(args: &ServeArgs, config: &operai_core::Config) -> Result<()> {
     let shutdown = async {
         let _ = signal::ctrl_c().await;
         info!("Received shutdown signal");
     };
-    run_with_shutdown(args, shutdown).await
+    run_with_shutdown(args, shutdown, config).await
 }
 
 /// Runs the gRPC server with a custom shutdown trigger.
@@ -45,16 +47,22 @@ pub async fn run(args: &ServeArgs) -> Result<()> {
 ///
 /// * `args` - Configuration for the server (config path and port)
 /// * `shutdown` - A future that completes when shutdown should occur
+/// * `config` - Operai project config
 ///
 /// # Behavior
 ///
 /// The server will:
 /// 1. Load tools from the config (or `operai.toml` if not specified)
-/// 2. Start a gRPC server on the specified port (default 50051)
-/// 3. Expose the toolbox service, health checks, and gRPC reflection
-/// 4. Wait for the shutdown future to complete
-/// 5. Drain in-flight requests before exiting
-async fn run_with_shutdown<F>(args: &ServeArgs, shutdown: F) -> Result<()>
+/// 2. Initialize search embedder from config if embedding is configured
+/// 3. Start a gRPC server on the specified port (default 50051)
+/// 4. Expose the toolbox service, health checks, and gRPC reflection
+/// 5. Wait for the shutdown future to complete
+/// 6. Drain in-flight requests before exiting
+async fn run_with_shutdown<F>(
+    args: &ServeArgs,
+    shutdown: F,
+    config: &operai_core::Config,
+) -> Result<()>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
@@ -76,6 +84,36 @@ where
         style("✓").green().bold(),
         local_runtime.registry().len()
     );
+
+    // Create search embedder from config if embedding is configured
+    let search_embedder = config.embedding.as_ref().map(|embedding_config| {
+        let generator = EmbeddingGenerator::from_config(config)
+            .context("failed to initialize search embedder");
+        match generator {
+            Ok(embedder) => {
+                println!(
+                    "{} {} Initialized search embedder",
+                    style("→").cyan(),
+                    style("✓").green().bold()
+                );
+                Some(Arc::new(CliSearchEmbedder::new(embedder)) as Arc<dyn SearchEmbedder>)
+            }
+            Err(e) => {
+                println!(
+                    "{} Failed to initialize search embedder: {} (search disabled)",
+                    style("⚠").yellow(),
+                    e
+                );
+                None
+            }
+        }
+    }).flatten();
+
+    let local_runtime = if let Some(embedder) = search_embedder {
+        local_runtime.with_search_embedder(Some(embedder))
+    } else {
+        local_runtime
+    };
 
     let toolbox_service = transports::grpc::ToolboxService::from_runtime(local_runtime.clone());
 
@@ -115,6 +153,31 @@ where
 
     info!("Operai Toolbox stopped");
     Ok(())
+}
+
+/// Wrapper that adapts [`EmbeddingGenerator`] to the [`SearchEmbedder`] trait.
+///
+/// This struct provides thread-safe access to an embedding generator,
+/// allowing it to be used concurrently by multiple search requests.
+struct CliSearchEmbedder {
+    /// The underlying embedding generator.
+    generator: EmbeddingGenerator,
+}
+
+impl CliSearchEmbedder {
+    /// Creates a new CLI search embedder from an embedding generator.
+    fn new(generator: EmbeddingGenerator) -> Self {
+        Self { generator }
+    }
+}
+
+impl SearchEmbedder for CliSearchEmbedder {
+    /// Generates an embedding vector for the given query text.
+    fn embed_query(&self, query: &str) -> operai_runtime::SearchEmbedFuture<'_> {
+        let query = query.to_string();
+        let generator = &self.generator;
+        Box::pin(async move { generator.embed(&query).await.map_err(|err| err.to_string()) })
+    }
 }
 
 /// Integration tests for the serve command.
@@ -344,7 +407,7 @@ mod tests {
         let server_handle = tokio::spawn(async move {
             run_with_shutdown(&args, async {
                 let _ = rx.await;
-            })
+            }, &operai_core::Config::empty())
             .await
         });
 

@@ -149,6 +149,8 @@ pub struct LocalRuntime {
     policy_store: Arc<PolicyStore>,
     /// Runtime context (reserved for future use).
     runtime_ctx: RuntimeContext,
+    /// Optional embedder for semantic search.
+    search_embedder: Option<Arc<dyn crate::search::SearchEmbedder>>,
 }
 
 impl LocalRuntime {
@@ -169,7 +171,18 @@ impl LocalRuntime {
             registry,
             policy_store,
             runtime_ctx,
+            search_embedder: None,
         }
+    }
+
+    /// Sets the search embedder for semantic search functionality.
+    #[must_use]
+    pub fn with_search_embedder(
+        mut self,
+        search_embedder: Option<Arc<dyn crate::search::SearchEmbedder>>,
+    ) -> Self {
+        self.search_embedder = search_embedder;
+        self
     }
 
     /// Returns a reference to the tool registry.
@@ -188,6 +201,12 @@ impl LocalRuntime {
     #[must_use]
     pub fn runtime_context(&self) -> &RuntimeContext {
         &self.runtime_ctx
+    }
+
+    /// Returns a reference to the search embedder.
+    #[must_use]
+    pub fn search_embedder(&self) -> Option<&Arc<dyn crate::search::SearchEmbedder>> {
+        self.search_embedder.as_ref()
     }
 
     /// Waits for all in-flight tool invocations to complete.
@@ -241,14 +260,26 @@ impl LocalRuntime {
     ///
     /// # Errors
     ///
-    /// Returns `Status::invalid_argument` if `query_embedding` is empty.
+    /// Returns `Status::invalid_argument` if neither `query_embedding` nor `query_text` is provided.
+    /// Returns `Status::invalid_argument` if `query_text` is provided but no search embedder is configured.
     pub async fn search_tools(
         &self,
         request: SearchToolsRequest,
     ) -> Result<SearchToolsResponse, Status> {
-        if request.query_embedding.is_empty() {
-            return Err(Status::invalid_argument("query_embedding is required"));
-        }
+        // Determine which query method to use (query_embedding takes precedence)
+        let embedding = if !request.query_embedding.is_empty() {
+            // Use client-provided embedding
+            request.query_embedding
+        } else if !request.query_text.is_empty() {
+            // Use server-side embedding generation
+            let embedder = self.search_embedder.as_ref()
+                .ok_or_else(|| Status::invalid_argument("search embedder not configured"))?;
+
+            embedder.embed_query(&request.query_text).await
+                .map_err(|err| Status::invalid_argument(format!("failed to embed query: {err}")))?
+        } else {
+            return Err(Status::invalid_argument("either query_embedding or query_text must be provided"));
+        };
 
         let page_size = if request.page_size <= 0 {
             10
@@ -257,11 +288,11 @@ impl LocalRuntime {
         };
 
         info!(
-            embedding_dims = request.query_embedding.len(),
-            "Searching with provided embedding"
+            embedding_dims = embedding.len(),
+            "Searching tools"
         );
 
-        let search_results = self.registry.search(&request.query_embedding, page_size);
+        let search_results = self.registry.search(&embedding, page_size);
 
         let results: Vec<SearchResult> = search_results
             .into_iter()
@@ -272,7 +303,7 @@ impl LocalRuntime {
             .collect();
 
         info!(
-            embedding_dims = request.query_embedding.len(),
+            embedding_dims = embedding.len(),
             result_count = results.len(),
             "Search completed"
         );

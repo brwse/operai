@@ -68,6 +68,11 @@ pub mod builder;
 /// and [`RemoteRuntime`] (gRPC client).
 pub mod runtime;
 
+/// Semantic search functionality for tool discovery.
+///
+/// Provides [`SearchEmbedder`] trait for generating vector embeddings from text queries.
+pub mod search;
+
 /// Transport layer implementations for serving tools over network protocols.
 ///
 /// Includes gRPC and MCP (feature-gated) transport implementations.
@@ -75,6 +80,7 @@ pub mod transports;
 
 pub use builder::RuntimeBuilder;
 pub use runtime::{CallMetadata, LocalRuntime, RemoteRuntime, Runtime};
+pub use search::{SearchEmbedFuture, SearchEmbedder};
 pub use transports::grpc::ToolboxService;
 #[cfg(feature = "mcp")]
-pub use transports::mcp::{McpService, SearchEmbedFuture, SearchEmbedder};
+pub use transports::mcp::McpService;

@@ -56,13 +56,22 @@ message SearchToolsRequest {
   // Pre-computed query embedding vector.
   // The client is responsible for generating embeddings using the same model
   // that was used to generate tool embeddings (e.g., text-embedding-3-small).
+  //
+  // If query_text is also provided, this field is ignored.
   repeated float query_embedding = 1;
 
+  // Query text to be embedded by the server for semantic search.
+  // When provided, the server will generate an embedding using the configured
+  // embedding model and use it for the search.
+  //
+  // This is optional. If provided, it takes precedence over query_embedding.
+  string query_text = 2;
+
   // Maximum number of results to return (default: 10, max: 100).
-  int32 page_size = 2;
+  int32 page_size = 3;
 
   // Pagination token from a previous SearchToolsResponse.
-  string page_token = 3;
+  string page_token = 4;
 }
 
 // Search result with relevance score.

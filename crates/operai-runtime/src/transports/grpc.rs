@@ -526,6 +526,7 @@ mod tests {
         );
         let request = Request::new(SearchToolsRequest {
             query_embedding: Vec::new(),
+            query_text: String::new(),
             page_size: 10,
             page_token: String::new(),
         });
@@ -533,11 +534,14 @@ mod tests {
         // Act
         let status = <ToolboxService as Toolbox>::search_tools(&service, request)
             .await
-            .expect_err("search_tools should reject an empty embedding");
+            .expect_err("search_tools should reject when both fields are empty");
 
         // Assert
         assert_eq!(status.code(), Code::InvalidArgument);
-        assert_eq!(status.message(), "query_embedding is required");
+        assert_eq!(
+            status.message(),
+            "either query_embedding or query_text must be provided"
+        );
     }
 
     #[tokio::test]
@@ -551,6 +555,7 @@ mod tests {
         );
         let request = Request::new(SearchToolsRequest {
             query_embedding: vec![0.1, 0.2, 0.3],
+            query_text: String::new(),
             page_size: 10,
             page_token: String::new(),
         });
@@ -885,11 +890,13 @@ mod tests {
         let (service, _registry) = service_with_hello_world_registry().await;
         let request_zero = Request::new(SearchToolsRequest {
             query_embedding: vec![0.1; 768],
+            query_text: String::new(),
             page_size: 0,
             page_token: String::new(),
         });
         let request_negative = Request::new(SearchToolsRequest {
             query_embedding: vec![0.1; 768],
+            query_text: String::new(),
             page_size: -5,
             page_token: String::new(),
         });

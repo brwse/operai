@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
     match &args.command {
         Command::New(args) => commands::new::run(args),
         Command::Build(args) => commands::build::run(args, &config).await,
-        Command::Serve(args) => commands::serve::run(args).await,
+        Command::Serve(args) => commands::serve::run(args, &config).await,
         Command::Mcp(args) => commands::mcp::run(args, &config).await,
         Command::Call(args) => commands::call::run(args).await,
         Command::List(args) => commands::list::run(args).await,

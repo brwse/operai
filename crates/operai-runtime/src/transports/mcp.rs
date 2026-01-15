@@ -26,7 +26,6 @@
 
 use std::{borrow::Cow, sync::Arc};
 
-use futures::future::BoxFuture;
 use operai_core::{ToolInfo, ToolRegistry, policy::session::PolicyStore};
 use rmcp::{
     ErrorData, RoleServer,
@@ -49,45 +48,12 @@ use tonic::Code;
 use crate::{
     proto::{CallToolRequest, ListToolsRequest, SearchToolsRequest, call_tool_response},
     runtime::{CallMetadata, LocalRuntime, json_value_to_struct, struct_to_json_value},
+    search::SearchEmbedder,
 };
 
 const SEARCH_TOOL_LIST: &str = "list_tool";
 const SEARCH_TOOL_FIND: &str = "find_tool";
 const SEARCH_TOOL_CALL: &str = "call_tool";
-
-/// Future type for embedding generation.
-///
-/// Used by [`SearchEmbedder`] to asynchronously generate query embeddings
-/// for semantic tool search.
-pub type SearchEmbedFuture<'a> = BoxFuture<'a, Result<Vec<f32>, String>>;
-
-/// Embedding generator for semantic tool search.
-///
-/// Implementors generate vector embeddings from text queries, enabling
-/// semantic similarity search across the tool registry. The embedding
-/// is compared against pre-computed tool embeddings to find relevant tools.
-///
-/// # Example
-///
-/// ```ignore
-/// struct MyEmbedder;
-///
-/// impl SearchEmbedder for MyEmbedder {
-///     fn embed_query(&self, query: &str) -> SearchEmbedFuture<'_> {
-///         Box::pin(async {
-///             // Generate embedding vector (e.g., using an ML model)
-///             Ok(vec![0.1, 0.2, 0.3, /* ... */])
-///         })
-///     }
-/// }
-/// ```
-pub trait SearchEmbedder: Send + Sync {
-    /// Generate an embedding vector for the given query text.
-    ///
-    /// The returned vector should have the same dimensionality as the
-    /// tool embeddings used when indexing the tool registry.
-    fn embed_query(&self, query: &str) -> SearchEmbedFuture<'_>;
-}
 
 /// MCP server service implementation.
 ///
@@ -348,6 +314,7 @@ async fn call_search_mode_tool(
             let response = runtime
                 .search_tools(SearchToolsRequest {
                     query_embedding: embedding,
+                    query_text: String::new(),
                     page_size: args.page_size.unwrap_or(0),
                     page_token: args.page_token.unwrap_or_default(),
                 })
@@ -854,6 +821,7 @@ mod tests {
     use tokio::sync::oneshot;
 
     use super::*;
+    use crate::SearchEmbedFuture;
 
     struct TestEmbedder;
 
