@@ -67,8 +67,8 @@
 //! define_system_credential!(ApiKey("api_key") {
 //!     /// API key for authentication
 //!     key: String,
-//!     #[optional]
 //!     /// Optional endpoint override
+//!     #[optional]
 //!     endpoint: Option<String>,
 //! });
 //!

@@ -65,8 +65,8 @@
 //! define_system_credential!(ApiKey("api_key") {
 //!     /// API key for authentication
 //!     key: String,
-//!     #[optional]
 //!     /// Optional endpoint override
+//!     #[optional]
 //!     endpoint: Option<String>,
 //! });
 //! ```
@@ -565,8 +565,8 @@ fn extract_result_ok_type(ty: &Type) -> Result<&Type> {
 /// define_system_credential!(StructName("credential_name") {
 ///     /// Field description
 ///     field_name: Type,
-///     #[optional]
 ///     /// Optional field description
+///     #[optional]
 ///     optional_field: Option<Type>,
 /// });
 /// ```
@@ -1021,8 +1021,8 @@ mod tests {
             ApiCredential("api") {
                 /// API key used for auth.
                 api_key: String,
-                #[optional]
                 /// Optional endpoint override.
+                #[optional]
                 endpoint: Option<String>,
             }
         );
@@ -1059,8 +1059,8 @@ mod tests {
             ApiCredential("api") {
                 /// API key used for auth.
                 api_key: String,
-                #[optional]
                 /// Optional endpoint override.
+                #[optional]
                 endpoint: Option<String>,
             }
         ));
