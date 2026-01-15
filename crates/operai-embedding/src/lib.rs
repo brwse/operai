@@ -25,7 +25,7 @@
 //! # #[tokio::main]
 //! # async fn main() -> anyhow::Result<()> {
 //! // Generate embeddings using default configuration
-//! let mut generator = EmbeddingGenerator::from_config(None, None)?;
+//! let generator = EmbeddingGenerator::from_config(None, None)?;
 //! let embedding = generator.embed("Hello, world!").await?;
 //! # Ok(())
 //! # }

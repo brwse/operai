@@ -1,14 +1,17 @@
 //! MCP (Model Context Protocol) server command implementation.
 //!
-//! This module provides the `mcp` subcommand which runs an MCP server that exposes
-//! operai tools to MCP clients (such as Claude Desktop or other AI assistants).
-//! The server can run in two modes:
+//! This module provides the `mcp` subcommand which runs an MCP server that
+//! exposes operai tools to MCP clients (such as Claude Desktop or other AI
+//! assistants). The server can run in two modes:
 //!
-//! - **HTTP mode**: Exposes tools via a streaming HTTP endpoint on a configurable address/path
-//! - **stdio mode**: Communicates via standard input/output for direct client integration
+//! - **HTTP mode**: Exposes tools via a streaming HTTP endpoint on a
+//!   configurable address/path
+//! - **stdio mode**: Communicates via standard input/output for direct client
+//!   integration
 //!
-//! The server supports optional semantic search capabilities when `--searchable` is enabled,
-//! allowing clients to discover tools using natural language queries.
+//! The server supports optional semantic search capabilities when
+//! `--searchable` is enabled, allowing clients to discover tools using natural
+//! language queries.
 
 use std::{future::Future, net::SocketAddr, path::PathBuf};
 
@@ -172,31 +175,23 @@ where
 /// This struct provides thread-safe access to an embedding generator,
 /// allowing it to be used concurrently by multiple search requests.
 struct CliSearchEmbedder {
-    /// The underlying embedding generator, protected by a mutex for async-safe access.
-    generator: tokio::sync::Mutex<EmbeddingGenerator>,
+    /// The underlying embedding generator.
+    generator: EmbeddingGenerator,
 }
 
 impl CliSearchEmbedder {
     /// Creates a new CLI search embedder from an embedding generator.
     fn new(generator: EmbeddingGenerator) -> Self {
-        Self {
-            generator: tokio::sync::Mutex::new(generator),
-        }
+        Self { generator }
     }
 }
 
 impl SearchEmbedder for CliSearchEmbedder {
     /// Generates an embedding vector for the given query text.
-    ///
-    /// This implementation clones the query string and acquires an async lock
-    /// on the underlying generator to ensure thread-safe access.
     fn embed_query(&self, query: &str) -> SearchEmbedFuture<'_> {
         let query = query.to_string();
         let generator = &self.generator;
-        Box::pin(async move {
-            let mut guard = generator.lock().await;
-            guard.embed(&query).await.map_err(|err| err.to_string())
-        })
+        Box::pin(async move { generator.embed(&query).await.map_err(|err| err.to_string()) })
     }
 }
 
@@ -223,8 +218,10 @@ fn build_search_embedder() -> Result<std::sync::Arc<dyn SearchEmbedder>> {
 /// # Arguments
 ///
 /// * `runtime` - The operai runtime containing registered tools
-/// * `searchable` - Whether to enable search mode (exposes search tools instead of all tools)
-/// * `search_embedder` - Optional embedder for semantic search (required if `searchable` is true)
+/// * `searchable` - Whether to enable search mode (exposes search tools instead
+///   of all tools)
+/// * `search_embedder` - Optional embedder for semantic search (required if
+///   `searchable` is true)
 ///
 /// # Behavior
 ///
@@ -236,7 +233,8 @@ fn build_search_embedder() -> Result<std::sync::Arc<dyn SearchEmbedder>> {
 ///
 /// # Errors
 ///
-/// Returns an error if the stdio server fails to start or encounters a fatal error.
+/// Returns an error if the stdio server fails to start or encounters a fatal
+/// error.
 async fn run_stdio(
     runtime: operai_runtime::LocalRuntime,
     searchable: bool,
@@ -324,7 +322,8 @@ mod tests {
         mcp: McpArgs,
     }
 
-    /// Verifies that [`McpArgs`] uses expected default values when no flags are provided.
+    /// Verifies that [`McpArgs`] uses expected default values when no flags are
+    /// provided.
     #[test]
     fn test_mcp_args_defaults() {
         let cli = McpArgsCli::try_parse_from(["test"]).expect("args should parse");

@@ -115,7 +115,7 @@ where
                 anyhow::bail!("no Cargo.toml found in: {}", crate_path.display());
             }
 
-            let mut generator =
+            let generator =
                 EmbeddingGenerator::from_config(args.provider.as_deref(), args.model.as_deref())?;
 
             let pb = ProgressBar::new_spinner();

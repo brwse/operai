@@ -2451,6 +2451,7 @@ dependencies = [
  "anyhow",
  "async-openai",
  "fastembed",
+ "futures",
  "serde",
  "serde_json",
  "tokio",
