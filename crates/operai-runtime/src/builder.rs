@@ -248,24 +248,67 @@ fn load_manifest_or_empty(manifest_path: &Path) -> Result<Manifest, RuntimeBuild
 }
 
 fn resolve_tool_path(tool: &operai_core::ToolConfig, manifest_dir: &Path) -> Option<PathBuf> {
+    // 1. Explicit path takes precedence
     if let Some(path) = &tool.path {
         let path = PathBuf::from(path);
         if path.is_absolute() {
-            Some(path)
+            return Some(path);
         } else {
-            Some(manifest_dir.join(path))
+            return Some(manifest_dir.join(path));
         }
-    } else if let Some(pkg) = &tool.package {
+    }
+
+    // 2. Name-based resolution - search in configured directories
+    if let Some(name) = &tool.name {
         let lib_name = format!(
             "{}{}{}",
             std::env::consts::DLL_PREFIX,
-            pkg.replace('-', "_"),
+            name.replace('-', "_"),
             std::env::consts::DLL_SUFFIX
         );
-        Some(manifest_dir.join("target/release").join(lib_name))
-    } else {
-        None
+
+        // Collect all search paths as Option<PathBuf>, then filter and flatten
+        let mut search_paths: Vec<Option<PathBuf>> = vec![
+            // Standard target/release directory
+            Some(manifest_dir.join("target/release")),
+            // System-wide tools directory
+            Some(PathBuf::from("/usr/local/lib/operai")),
+        ];
+
+        // Workspace target directory (if in workspace)
+        let workspace_target = manifest_dir.join("..").join("..").join("target/release");
+        if workspace_target.exists() {
+            search_paths.push(Some(workspace_target));
+        }
+
+        // Global tools directory (e.g., ~/.operai/tools)
+        if let Some(home) = dirs::home_dir() {
+            search_paths.push(Some(home.join(".operai").join("tools")));
+        }
+
+        for search_path in search_paths.into_iter().flatten() {
+            let full_path = search_path.join(&lib_name);
+            if full_path.exists() {
+                info!(
+                    name = %name,
+                    path = %full_path.display(),
+                    "Resolved tool by name"
+                );
+                return Some(full_path);
+            }
+        }
+
+        // If not found, return the default path for better error messages
+        let default_path = manifest_dir.join("target/release").join(&lib_name);
+        warn!(
+            name = %name,
+            attempted_path = %default_path.display(),
+            "Tool not found in search paths, will attempt to load from default location"
+        );
+        return Some(default_path);
     }
+
+    None
 }
 
 fn normalize_endpoint(endpoint: &str) -> String {
@@ -463,5 +506,53 @@ mod tests {
             panic!("expected output result");
         };
         assert_eq!(output_string(&output, "echo"), "hi");
+    }
+
+    #[tokio::test]
+    async fn test_runtime_builder_name_based_resolution() {
+        let lib_path = hello_world_cdylib_path();
+
+        // Create a manifest in temp directory that uses name-based resolution
+        let manifest_path = temp_manifest_path();
+        let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+        let contents = format!("[[tools]]\nname = \"hello_world\"\nenabled = true\n");
+        std::fs::write(&manifest_path, contents).expect("write manifest");
+
+        // Create target/release structure in manifest dir for testing
+        let target_dir = manifest_dir.join("target/release");
+        std::fs::create_dir_all(&target_dir).expect("create target dir");
+
+        // Copy library to test location
+        let test_lib_dest = target_dir.join(format!(
+            "{}hello_world{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_SUFFIX
+        ));
+        std::fs::copy(&lib_path, &test_lib_dest).expect("copy library");
+
+        let runtime = RuntimeBuilder::new()
+            .with_manifest_path(&manifest_path)
+            .build_local()
+            .await
+            .expect("runtime should build with name-based resolution");
+
+        let list_response = runtime
+            .list_tools(ListToolsRequest {
+                page_size: 1000,
+                page_token: String::new(),
+            })
+            .await
+            .expect("list_tools should succeed");
+        assert!(
+            list_response
+                .tools
+                .iter()
+                .any(|tool| tool.name == "tools/hello-world.echo"),
+            "expected hello-world tools to be registered via name-based resolution"
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_file(&test_lib_dest);
+        let _ = std::fs::remove_dir_all(target_dir);
     }
 }

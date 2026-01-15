@@ -3,7 +3,6 @@
 //! Usage:
 //! ```bash
 //! cargo operai new my-tool        # Create new tool project
-//! cargo operai embed              # Generate embeddings
 //! cargo operai build              # Build with embeddings
 //! cargo operai serve              # Run local dev server
 //! cargo operai mcp                # Run MCP server
@@ -55,9 +54,6 @@ enum Command {
     /// Create a new tool project
     New(commands::new::NewArgs),
 
-    /// Generate embeddings for the current crate
-    Embed(commands::embed::EmbedArgs),
-
     /// Build the tool (runs embed + cargo build --release)
     Build(commands::build::BuildArgs),
 
@@ -81,7 +77,6 @@ impl std::fmt::Debug for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::New(_) => f.debug_tuple("New").finish(),
-            Self::Embed(_) => f.debug_tuple("Embed").finish(),
             Self::Build(_) => f.debug_tuple("Build").finish(),
             Self::Serve(_) => f.debug_tuple("Serve").finish(),
             Self::Mcp(_) => f.debug_tuple("Mcp").finish(),
@@ -106,7 +101,6 @@ async fn main() -> Result<()> {
 
     match &args.command {
         Command::New(args) => commands::new::run(args),
-        Command::Embed(args) => commands::embed::run(args).await,
         Command::Build(args) => commands::build::run(args).await,
         Command::Serve(args) => commands::serve::run(args).await,
         Command::Mcp(args) => commands::mcp::run(args).await,
@@ -267,33 +261,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_embed_parses_optional_flags() -> Result<(), clap::Error> {
-        let command = parse_command(&[
-            "cargo",
-            "operai",
-            "embed",
-            "--path",
-            "my-crate",
-            "-P",
-            "openai",
-            "--model",
-            "text-embedding-3-small",
-            "--output",
-            "embedding.bin",
-        ])?;
-
-        let Command::Embed(args) = command else {
-            panic!("expected Command::Embed");
-        };
-
-        assert_eq!(args.path, Some(std::path::PathBuf::from("my-crate")));
-        assert_eq!(args.provider.as_deref(), Some("openai"));
-        assert_eq!(args.model.as_deref(), Some("text-embedding-3-small"));
-        assert_eq!(args.output, Some(std::path::PathBuf::from("embedding.bin")));
-        Ok(())
-    }
-
-    #[test]
     fn test_cli_build_parses_path_skip_embed_provider_and_model() -> Result<(), clap::Error> {
         let command = parse_command(&[
             "cargo",
@@ -345,7 +312,6 @@ mod tests {
         // The Debug impl intentionally hides inner args for cleaner logging
         let test_cases = [
             ("cargo operai new my-tool", "New"),
-            ("cargo operai embed", "Embed"),
             ("cargo operai build", "Build"),
             ("cargo operai serve", "Serve"),
             ("cargo operai call tool.id {}", "Call"),

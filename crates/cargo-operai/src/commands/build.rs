@@ -1,12 +1,13 @@
 //! `cargo operai build` command implementation.
 
-use std::{ffi::OsStr, future::Future, path::PathBuf, process::Command};
+use std::{ffi::OsStr, path::PathBuf, process::Command};
 
 use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
-
-use super::embed;
+use indicatif::{ProgressBar, ProgressStyle};
+use operai_embedding::{EmbeddingGenerator, write_embedding_file};
+use tracing::info;
 
 /// Arguments for the `build` command.
 #[derive(Args)]
@@ -34,16 +35,11 @@ pub struct BuildArgs {
 
 /// Builds the tool crate, optionally generating embeddings first.
 pub async fn run(args: &BuildArgs) -> Result<()> {
-    run_with(args, "cargo", |embed_args| async move {
-        embed::run(&embed_args).await
-    })
-    .await
+    run_with(args, "cargo").await
 }
 
-async fn run_with<E, Fut, P>(args: &BuildArgs, cargo_program: P, embed_runner: E) -> Result<()>
+async fn run_with<P>(args: &BuildArgs, cargo_program: P) -> Result<()>
 where
-    E: FnOnce(embed::EmbedArgs) -> Fut,
-    Fut: Future<Output = Result<()>>,
     P: AsRef<OsStr>,
 {
     let crate_path = args.path.clone().unwrap_or_else(|| PathBuf::from("."));
@@ -51,14 +47,50 @@ where
     if !args.skip_embed {
         println!("{} Generating embedding...", style("→").cyan());
 
-        let embed_args = embed::EmbedArgs {
-            path: args.path.clone(),
-            provider: args.provider.clone(),
-            model: args.model.clone(),
-            output: None,
-        };
+        let output_path = crate_path.join(".brwse-embedding");
+        let cargo_toml = crate_path.join("Cargo.toml");
 
-        if let Err(e) = embed_runner(embed_args).await {
+        if let Err(e) = async {
+            if !cargo_toml.exists() {
+                anyhow::bail!("no Cargo.toml found in: {}", crate_path.display());
+            }
+
+            let mut generator =
+                EmbeddingGenerator::from_config(args.provider.as_deref(), args.model.as_deref())?;
+
+            let pb = ProgressBar::new_spinner();
+            pb.set_style(
+                ProgressStyle::default_spinner()
+                    .template("{spinner:.green} {msg}")
+                    .expect("invalid template"),
+            );
+            pb.set_message("Generating embedding...");
+            pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+            let embedding = generator.embed_crate(&crate_path).await?;
+
+            pb.finish_and_clear();
+
+            write_embedding_file(&output_path, &embedding)
+                .context("failed to write embedding file")?;
+
+            info!(
+                dimension = embedding.len(),
+                output = %output_path.display(),
+                "Embedding generated"
+            );
+
+            println!(
+                "{} Generated embedding ({} dimensions) -> {}",
+                style("✓").green().bold(),
+                embedding.len(),
+                output_path.display()
+            );
+
+            Ok::<(), anyhow::Error>(())
+        }
+        .await
+        {
             println!(
                 "{} Embedding generation failed: {} (continuing without embedding)",
                 style("⚠").yellow(),
@@ -201,8 +233,6 @@ mod tests {
 
         let cargo_path = install_fake_cargo(&bin_dir, 0)?;
 
-        let embed_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let embed_called_inner = std::sync::Arc::clone(&embed_called);
         let args = BuildArgs {
             path: Some(crate_dir.clone()),
             skip_embed: true,
@@ -212,15 +242,9 @@ mod tests {
         };
 
         // Act
-        run_with(&args, cargo_path, move |_embed_args| {
-            embed_called_inner.store(true, std::sync::atomic::Ordering::Relaxed);
-            async { Ok(()) }
-        })
-        .await?;
+        run_with(&args, cargo_path).await?;
 
         // Assert
-        assert!(!embed_called.load(std::sync::atomic::Ordering::Relaxed));
-
         let cargo_args = read_lines(&crate_dir.join("cargo_args.txt"))?;
         assert_eq!(
             cargo_args,
@@ -236,34 +260,31 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn test_run_forwards_embed_args_and_continues_on_embed_error() -> anyhow::Result<()> {
+    async fn test_run_continues_on_embed_error() -> anyhow::Result<()> {
         // Arrange
         let temp = TestTempDir::new("operai-build")?;
         let crate_dir = temp.path().join("crate");
         let bin_dir = temp.path().join("bin");
         fs::create_dir_all(&crate_dir)?;
         fs::create_dir_all(&bin_dir)?;
+        // Create a minimal Cargo.toml to avoid the "no Cargo.toml" error
+        fs::write(
+            crate_dir.join("Cargo.toml"),
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\n",
+        )?;
 
         let cargo_path = install_fake_cargo(&bin_dir, 0)?;
 
         let args = BuildArgs {
             path: Some(crate_dir.clone()),
             skip_embed: false,
-            provider: Some("fastembed".to_owned()),
+            provider: Some("invalid-provider-that-does-not-exist".to_owned()),
             model: Some("some-model".to_owned()),
             cargo_args: Vec::new(),
         };
 
-        // Act
-        let crate_dir_for_embed = crate_dir.clone();
-        run_with(&args, cargo_path, move |embed_args| async move {
-            assert_eq!(embed_args.path.as_ref(), Some(&crate_dir_for_embed));
-            assert_eq!(embed_args.provider.as_deref(), Some("fastembed"));
-            assert_eq!(embed_args.model.as_deref(), Some("some-model"));
-            assert!(embed_args.output.is_none());
-            anyhow::bail!("boom")
-        })
-        .await?;
+        // Act - embedding will fail but cargo build should succeed
+        run_with(&args, cargo_path).await?;
 
         // Assert
         let cargo_args = read_lines(&crate_dir.join("cargo_args.txt"))?;
@@ -292,7 +313,7 @@ mod tests {
         };
 
         // Act
-        let error = run_with(&args, cargo_path, |_embed_args| async { Ok(()) })
+        let error = run_with(&args, cargo_path)
             .await
             .expect_err("expected cargo build failure");
 
@@ -321,7 +342,7 @@ mod tests {
 
         // Act
         let missing_cargo_path = temp.path().join("missing-cargo");
-        let error = run_with(&args, missing_cargo_path, |_embed_args| async { Ok(()) })
+        let error = run_with(&args, missing_cargo_path)
             .await
             .expect_err("expected cargo to be missing");
 
@@ -351,7 +372,7 @@ mod tests {
         };
 
         // Act
-        run_with(&args, cargo_path, |_embed_args| async { Ok(()) }).await?;
+        run_with(&args, cargo_path).await?;
 
         // Assert - verify cargo was run in the crate directory
         let cargo_cwd = fs::read_to_string(crate_dir.join("cargo_cwd.txt"))?;
@@ -362,48 +383,6 @@ mod tests {
         let expected_cwd = fs::canonicalize(&crate_dir)?;
         let actual_cwd = fs::canonicalize(cargo_cwd)?;
         assert_eq!(actual_cwd, expected_cwd);
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn test_run_calls_embedding_then_cargo_on_success() -> anyhow::Result<()> {
-        // Arrange
-        let temp = TestTempDir::new("operai-build")?;
-        let crate_dir = temp.path().join("crate");
-        let bin_dir = temp.path().join("bin");
-        fs::create_dir_all(&crate_dir)?;
-        fs::create_dir_all(&bin_dir)?;
-
-        let cargo_path = install_fake_cargo(&bin_dir, 0)?;
-
-        let embed_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let embed_called_inner = std::sync::Arc::clone(&embed_called);
-
-        let args = BuildArgs {
-            path: Some(crate_dir.clone()),
-            skip_embed: false,
-            provider: Some("test-provider".to_owned()),
-            model: Some("test-model".to_owned()),
-            cargo_args: Vec::new(),
-        };
-
-        // Act
-        run_with(&args, cargo_path, move |embed_args| {
-            embed_called_inner.store(true, std::sync::atomic::Ordering::Relaxed);
-            // Verify embed args were passed correctly
-            assert_eq!(embed_args.provider.as_deref(), Some("test-provider"));
-            assert_eq!(embed_args.model.as_deref(), Some("test-model"));
-            async { Ok(()) }
-        })
-        .await?;
-
-        // Assert
-        assert!(embed_called.load(std::sync::atomic::Ordering::Relaxed));
-
-        // Verify cargo was also called
-        let cargo_args = read_lines(&crate_dir.join("cargo_args.txt"))?;
-        assert_eq!(cargo_args, vec!["build".to_owned(), "--release".to_owned()]);
 
         Ok(())
     }
@@ -433,7 +412,7 @@ mod tests {
         };
 
         // Act
-        run_with(&args, cargo_path, |_embed_args| async { Ok(()) }).await?;
+        run_with(&args, cargo_path).await?;
 
         // Assert - verify cargo was run in temp.path() (the "current directory")
         let cargo_cwd = fs::read_to_string(temp.path().join("cargo_cwd.txt"))?;

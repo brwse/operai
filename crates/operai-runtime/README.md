@@ -1,43 +1,100 @@
 # operai-runtime
 
-Operai runtime library.
+**Operai gRPC server**
 
-This crate provides:
-- Local runtime execution backed by a tool registry
-- Remote runtime execution via gRPC
-- gRPC service implementation (`ToolboxService`)
-- MCP transport (feature `mcp`)
+[![Crates.io](https://img.shields.io/crates/v/operai-runtime)](https://crates.io/crates/operai-runtime)
 
-## Runtime Builder
+## Overview
+
+`operai-runtime` provides the server-side runtime for the Operai Toolbox. It exposes tools over gRPC and MCP (Model Context Protocol), handling tool discovery, invocation, and lifecycle management.
+
+## Features
+
+- **gRPC transport** — Full Protobuf-based API for tool operations
+- **MCP support** — Model Context Protocol for AI agent integration (feature-gated)
+- **Local and remote runtimes** — Run tools in-process or connect to remote servers
+- **Tool discovery** — List, search, and describe available tools
+- **Semantic search** — Find tools by embedding similarity
+
+## Feature Flags
+
+| Flag | Description |
+|------|-------------|
+| `mcp` | Enable Model Context Protocol support |
+| `static-link` | Link tools statically instead of dynamic loading |
+
+## Usage
+
+### Building a Runtime
 
 ```rust
 use operai_runtime::RuntimeBuilder;
 
 let runtime = RuntimeBuilder::new()
-    .with_manifest_path("operai.toml")
-    .build_local()
+    .manifest_path("operai.toml")
+    .build()
     .await?;
 ```
 
-## gRPC Service
+### Local Runtime
 
 ```rust
-use operai_runtime::{RuntimeBuilder, transports::grpc::ToolboxService};
+use operai_runtime::LocalRuntime;
 
-let runtime = RuntimeBuilder::new().build_local().await?;
-let service = ToolboxService::from_runtime(runtime);
+let runtime = LocalRuntime::from_manifest("operai.toml").await?;
+
+// Call a tool
+let result = runtime.call(
+    "my-crate.my-tool",
+    &input,
+    CallMetadata::default(),
+).await?;
 ```
 
-## MCP Service (feature = "mcp")
+### gRPC Service
+
+```rust
+use operai_runtime::ToolboxService;
+use tonic::transport::Server;
+
+let service = ToolboxService::new(runtime);
+
+Server::builder()
+    .add_service(service.into_server())
+    .serve("[::]:50051".parse()?)
+    .await?;
+```
+
+### MCP Service
 
 ```rust
 use operai_runtime::McpService;
 
-let runtime = RuntimeBuilder::new().build_local().await?;
-let service = McpService::from_runtime(runtime).searchable(true);
+let mcp = McpService::new(runtime);
+// Use with rmcp transport
 ```
 
-## Call Metadata
+## Key Types
 
-When calling tools programmatically, you can supply request/session/user IDs
-and credentials via `CallMetadata`.
+| Type | Description |
+|------|-------------|
+| `RuntimeBuilder` | Builder for configuring and creating runtimes |
+| `LocalRuntime` | In-process runtime with loaded tools |
+| `RemoteRuntime` | Client for connecting to remote toolbox servers |
+| `Runtime` | Trait for runtime implementations |
+| `ToolboxService` | gRPC service implementation |
+| `McpService` | MCP service implementation (requires `mcp` feature) |
+| `CallMetadata` | Per-request metadata (credentials, trace ID, etc.) |
+
+## Proto API
+
+The gRPC API is defined in `proto/brwse/toolbox/v1alpha1/`:
+
+- `ListTools` — Enumerate available tools
+- `DescribeTool` — Get tool metadata and schema
+- `CallTool` — Invoke a tool with input
+- `SearchTools` — Semantic search over tool embeddings
+
+## License
+
+[PolyForm Noncommercial License 1.0.0](../../LICENSE)

@@ -1,72 +1,116 @@
 # cargo-operai
 
-Cargo subcommand for Operai Tool SDK development.
+**Cargo subcommand for Operai SDK development**
 
-## Usage
+[![Crates.io](https://img.shields.io/crates/v/cargo-operai)](https://crates.io/crates/cargo-operai)
+
+## Overview
+
+`cargo-operai` is a Cargo subcommand that provides development tools for building, testing, and serving Operai tools.
+
+## Installation
 
 ```bash
-cargo operai new my-tool        # Create new tool project
-cargo operai embed              # Generate embeddings
-cargo operai build              # Build with embeddings
-cargo operai serve              # Run local gRPC server
-cargo operai mcp                # Run MCP server (HTTP)
-cargo operai mcp --stdio        # MCP over stdio
-cargo operai call <tool> <json> # Test a tool
-cargo operai list               # List available tools
-cargo operai describe <tool>    # Show tool details
+cargo install cargo-operai
 ```
 
-`call` accepts inline JSON or `@path/to/input.json`.
+## Commands
 
-Common flags:
-- `cargo operai mcp --searchable` to enable semantic search endpoints
-- `cargo operai list --format json` for machine-readable output
+### `cargo operai new`
 
-## Embedding Configuration
+Create a new tool project:
 
-Global defaults: `~/.config/operai/config.toml`
+```bash
+cargo operai new my-tool
+cargo operai new my-tools --multi  # Create multi-tool project
+```
+
+### `cargo operai build`
+
+Build the tool with embedding generation:
+
+```bash
+cargo operai build
+cargo operai build --skip-embed              # Skip embedding generation
+cargo operai build -- --features extra       # Pass args to cargo
+```
+
+### `cargo operai serve`
+
+Start a local gRPC server:
+
+```bash
+cargo operai serve                           # Default port 50051
+cargo operai serve --port 8080
+cargo operai serve --manifest path/to/operai.toml
+```
+
+### `cargo operai mcp`
+
+Start an MCP (Model Context Protocol) server:
+
+```bash
+cargo operai mcp                             # stdio transport
+cargo operai mcp --transport http --port 3000
+```
+
+### `cargo operai call`
+
+Invoke a tool for testing:
+
+```bash
+cargo operai call my-crate.my-tool '{"name": "world"}'
+cargo operai call my-crate.my-tool --input-file input.json
+cargo operai call my-crate.my-tool '{}' --server localhost:50051
+```
+
+### `cargo operai list`
+
+List available tools:
+
+```bash
+cargo operai list
+cargo operai list --format json
+cargo operai list --server localhost:50051
+```
+
+### `cargo operai describe`
+
+Get detailed tool information:
+
+```bash
+cargo operai describe my-crate.my-tool
+cargo operai describe my-crate.my-tool --format json
+```
+
+## Configuration
+
+### Project Config (`operai.toml`)
 
 ```toml
+[[tools]]
+name = "my-tool"
+path = "target/release/libmy_tool.dylib"
+
 [embedding]
-provider = "fastembed" # or "openai"
-model = "nomic-embed-text-v1.5"
-
-[embedding.openai]
-api_key_env = "OPENAI_API_KEY"
+provider = "fastembed"
+model = "BAAI/bge-small-en-v1.5"
 ```
 
-Project overrides (read from `operai.toml`):
+### User Config (`~/.brwse/config.toml`)
 
 ```toml
-embedding_provider = "fastembed"
-embedding_model = "nomic-embed-text-v1.5"
+[openai]
+api_key = "sk-..."
 ```
 
-CLI flags override both:
+## Environment Variables
 
-```bash
-cargo operai embed -P openai --model text-embedding-3-small
-```
+| Variable | Description |
+|----------|-------------|
+| `OPENAI_API_KEY` | OpenAI API key for embeddings |
+| `RUST_LOG` | Log level (e.g., `debug`, `info`) |
 
-## Credentials for `cargo operai call`
+## License
 
-- Default credentials file: `~/.config/operai/credentials.toml`
-- Format: `provider:key=value;key2=value2`
-- Use `env:` to read values from environment variables
-
-Example credentials file:
-
-```toml
-[github]
-token = "env:GITHUB_TOKEN"
-
-[api]
-api_key = "secret"
-```
-
-Example CLI usage:
-
-```bash
-cargo operai call my-tool.greet '{"name":"World"}' \
-  --creds api:api_key=env:API_KEY
-```
+[PolyForm Noncommercial License 1.0.0](../../LICENSE)

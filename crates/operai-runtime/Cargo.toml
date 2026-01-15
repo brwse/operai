@@ -25,6 +25,7 @@ workspace = true
 operai-abi = { workspace = true }
 operai-core = { workspace = true }
 futures = { workspace = true }
+dirs = "5.0"
 
 # Stable ABI
 abi_stable = { workspace = true }

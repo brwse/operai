@@ -36,7 +36,7 @@ pub enum ManifestError {
 /// embedding_model = "fastembed"
 ///
 /// [[tools]]
-/// package = "hello-world"
+/// name = "hello-world"
 /// enabled = true
 ///
 /// [[policies]]
@@ -149,14 +149,14 @@ impl Manifest {
 /// Configuration for a single tool library.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolConfig {
-    /// Path to the dynamic library.
-    /// If `package` is specified, this is ignored or treated as an override?
-    /// For MVP: explicit path optional if package is set?
-    /// Let's keep it optional.
-    pub path: Option<String>,
+    /// Name of the tool for name-based resolution.
+    /// If `path` is not specified, the tool will be auto-resolved from
+    /// configured search directories using this name.
+    pub name: Option<String>,
 
-    /// Package name for auto-resolution.
-    pub package: Option<String>,
+    /// Path to the dynamic library.
+    /// If specified, this takes precedence over name-based resolution.
+    pub path: Option<String>,
 
     /// Checksum of the tool binary for verification (SHA256).
     pub checksum: Option<String>,
@@ -234,8 +234,8 @@ mod tests {
     fn test_manifest_clone_creates_independent_copy() {
         let original = Manifest {
             tools: vec![ToolConfig {
+                name: None,
                 path: Some("test.dylib".to_string()),
-                package: None,
                 checksum: None,
                 enabled: true,
                 credentials: HashMap::new(),
@@ -281,14 +281,14 @@ when = "true"
     }
 
     #[test]
-    fn test_deserialize_tool_config_package_support() {
+    fn test_deserialize_tool_config_name_support() {
         let toml = r#"
 [[tools]]
-package = "my-tool"
+name = "my-tool"
 enabled = true
 "#;
         let manifest: Manifest = toml::from_str(toml).unwrap();
-        assert_eq!(manifest.tools[0].package, Some("my-tool".to_string()));
+        assert_eq!(manifest.tools[0].name, Some("my-tool".to_string()));
         assert!(manifest.tools[0].path.is_none());
     }
 
