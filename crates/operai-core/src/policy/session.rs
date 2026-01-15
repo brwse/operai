@@ -43,9 +43,11 @@
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
+    time::Duration,
 };
 
 use async_trait::async_trait;
+use backon::{ExponentialBuilder, Retryable};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use thiserror::Error;
@@ -262,31 +264,27 @@ impl PolicyStore {
     /// The policy is compiled and stored by name. If a policy with the same
     /// name already exists, it will be replaced.
     ///
-    /// # Panics
-    ///
-    /// Panics if the policy lock is poisoned (indicating a previous writer
-    /// thread panicked while holding the write lock).
-    ///
     /// # Errors
     ///
-    /// Returns `Err(PolicyError)` if the policy fails to compile.
+    /// Returns `Err(PolicyError)` if the policy fails to compile or if the
+    /// policy lock is poisoned.
     pub fn register(&self, policy: Policy) -> Result<(), PolicyError> {
         let compiled = policy.compile()?;
-        let mut map = self.policies.write().expect("lock poisoned");
+        let mut map = self
+            .policies
+            .write()
+            .map_err(|_| PolicyError::EvalError("policy lock poisoned".into()))?;
         map.insert(compiled.original.name.clone(), compiled);
         Ok(())
     }
 
     /// Retrieve a registered policy by name.
     ///
-    /// # Panics
-    ///
-    /// Panics if the policy lock is poisoned (indicating a previous writer
-    /// thread panicked while holding the read lock).
+    /// Returns `None` if the policy doesn't exist or if the lock is poisoned.
     pub fn get(&self, name: &str) -> Option<Policy> {
         self.policies
             .read()
-            .expect("lock poisoned")
+            .ok()?
             .get(name)
             .map(|cp| cp.original.clone())
     }
@@ -320,8 +318,7 @@ impl PolicyStore {
         tool: &str,
         input: &JsonValue,
     ) -> Result<(), PolicyError> {
-        const MAX_RETRIES: u32 = 3;
-        for _ in 0..MAX_RETRIES {
+        let operation = || async {
             let mut session = self
                 .store
                 .load(session_id)
@@ -343,20 +340,31 @@ impl PolicyStore {
                 return Ok(());
             }
 
-            match self.store.save(session_id, &session).await {
-                Ok(()) => return Ok(()),
-                Err(SessionError::Conflict { .. }) => {} // Retry
-                Err(e) => {
-                    return Err(PolicyError::EvalError(format!(
-                        "Failed to save session: {e}"
-                    )));
+            self.store.save(session_id, &session).await.map_err(|e| {
+                if matches!(e, SessionError::Conflict { .. }) {
+                    PolicyError::SessionConflict
+                } else {
+                    PolicyError::EvalError(format!("Failed to save session: {e}"))
                 }
-            }
-        }
+            })
+        };
 
-        Err(PolicyError::EvalError(
-            "Failed to reserve session after retries due to conflicts".into(),
-        ))
+        operation
+            .retry(
+                ExponentialBuilder::default()
+                    .with_min_delay(Duration::from_millis(10))
+                    .with_max_delay(Duration::from_millis(100))
+                    .with_max_times(3)
+                    .with_jitter(),
+            )
+            .when(|e| matches!(e, PolicyError::SessionConflict))
+            .await
+            .map_err(|e| match e {
+                PolicyError::SessionConflict => PolicyError::EvalError(
+                    "Failed to reserve session after retries due to conflicts".into(),
+                ),
+                other => other,
+            })
     }
 
     /// Evaluate post-effects for all registered policies.
@@ -389,8 +397,7 @@ impl PolicyStore {
         input: &JsonValue,
         output: Result<&JsonValue, &str>,
     ) -> Result<(), PolicyError> {
-        const MAX_RETRIES: u32 = 3;
-        for _ in 0..MAX_RETRIES {
+        let operation = || async {
             let mut session = self
                 .store
                 .load(session_id)
@@ -404,19 +411,30 @@ impl PolicyStore {
                 }
             }
 
-            match self.store.save(session_id, &session).await {
-                Ok(()) => return Ok(()),
-                Err(SessionError::Conflict { .. }) => {} // Retry
-                Err(e) => {
-                    return Err(PolicyError::EvalError(format!(
-                        "Failed to save session: {e}"
-                    )));
+            self.store.save(session_id, &session).await.map_err(|e| {
+                if matches!(e, SessionError::Conflict { .. }) {
+                    PolicyError::SessionConflict
+                } else {
+                    PolicyError::EvalError(format!("Failed to save session: {e}"))
                 }
-            }
-        }
+            })
+        };
 
-        Err(PolicyError::EvalError(
-            "Failed to save session after retries due to conflicts".into(),
-        ))
+        operation
+            .retry(
+                ExponentialBuilder::default()
+                    .with_min_delay(Duration::from_millis(10))
+                    .with_max_delay(Duration::from_millis(100))
+                    .with_max_times(3)
+                    .with_jitter(),
+            )
+            .when(|e| matches!(e, PolicyError::SessionConflict))
+            .await
+            .map_err(|e| match e {
+                PolicyError::SessionConflict => PolicyError::EvalError(
+                    "Failed to save session after retries due to conflicts".into(),
+                ),
+                other => other,
+            })
     }
 }

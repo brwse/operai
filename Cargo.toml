@@ -104,6 +104,9 @@ tracing-subscriber = { version = "0.3", features = [
 thiserror = "2.0"
 anyhow = "1.0"
 
+# Retry with backoff
+backon = "1"
+
 # Inventory for compile-time registration
 inventory = "0.3"
 

@@ -36,7 +36,11 @@
 //! compiled.evaluate_pre_effects(&mut session, "dangerous.nuke", &input)?;
 //! ```
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use cel_interpreter::{
     Context, ParseErrors, Program, Value,
@@ -132,6 +136,10 @@ pub enum PolicyError {
     /// Error compiling CEL expressions to Programs.
     #[error("Compilation error: {0}")]
     CompilationError(String),
+
+    /// Session conflict during optimistic concurrency control (internal use).
+    #[error("Session conflict")]
+    SessionConflict,
 }
 
 /// A compiled effect ready for evaluation.
@@ -382,7 +390,10 @@ impl CompiledPolicy {
             success: output.is_ok(),
             output: output.ok().cloned(),
             error: output.err().map(ToString::to_string),
-            timestamp: 0,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
         });
 
         Ok(())

@@ -46,7 +46,8 @@
 //! embeddings.
 
 use std::{
-    collections::HashMap,
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -575,22 +576,40 @@ impl ToolRegistry {
     /// - Results are sorted by descending similarity score
     #[must_use]
     pub fn search(&self, query_embedding: &[f32], limit: usize) -> Vec<(&ToolInfo, f32)> {
-        if query_embedding.is_empty() {
+        if query_embedding.is_empty() || limit == 0 {
             return Vec::new();
         }
 
-        let mut results: Vec<_> = self
-            .embeddings
-            .iter()
-            .filter_map(|(id, embedding)| {
-                let score = cosine_similarity(query_embedding, embedding);
-                self.tools.get(id).map(|h| (&h.info, score))
-            })
+        // Use a min-heap to maintain top-K results in O(n log k) time
+        // instead of collecting all and sorting in O(n log n)
+        let mut heap: BinaryHeap<Reverse<OrderedScore<'_>>> = BinaryHeap::with_capacity(limit);
+
+        for (id, embedding) in &self.embeddings {
+            let score = cosine_similarity(query_embedding, embedding);
+            if let Some(handle) = self.tools.get(id) {
+                let entry = Reverse(OrderedScore {
+                    score,
+                    info: &handle.info,
+                });
+
+                if heap.len() < limit {
+                    heap.push(entry);
+                } else if let Some(min) = heap.peek() {
+                    if score > min.0.score {
+                        heap.pop();
+                        heap.push(entry);
+                    }
+                }
+            }
+        }
+
+        // Extract results: min-heap with Reverse gives us ascending order,
+        // so we collect and reverse to get descending order
+        let mut results: Vec<_> = heap
+            .into_iter()
+            .map(|Reverse(os)| (os.info, os.score))
             .collect();
-
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        results.truncate(limit);
         results
     }
 
@@ -694,21 +713,51 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
 
-    let mut dot_product = 0.0;
-    let mut norm_a = 0.0;
-    let mut norm_b = 0.0;
-
-    for (x, y) in a.iter().zip(b.iter()) {
-        dot_product += x * y;
-        norm_a += x * x;
-        norm_b += y * y;
-    }
+    // Use iterator-based fold for better compiler auto-vectorization
+    let (dot_product, norm_a, norm_b) = a
+        .iter()
+        .zip(b.iter())
+        .fold((0.0_f32, 0.0_f32, 0.0_f32), |(dot, na, nb), (&x, &y)| {
+            (dot + x * y, na + x * x, nb + y * y)
+        });
 
     let denominator = norm_a.sqrt() * norm_b.sqrt();
     if denominator == 0.0 {
         0.0
     } else {
         dot_product / denominator
+    }
+}
+
+/// Helper struct for ordered comparison in BinaryHeap.
+///
+/// Wraps a score and tool info reference for use in the top-K heap.
+/// Comparison is based solely on the score for heap ordering.
+#[derive(Debug)]
+struct OrderedScore<'a> {
+    score: f32,
+    info: &'a ToolInfo,
+}
+
+impl PartialEq for OrderedScore<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.score == other.score
+    }
+}
+
+impl Eq for OrderedScore<'_> {}
+
+impl PartialOrd for OrderedScore<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OrderedScore<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.score
+            .partial_cmp(&other.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
     }
 }
 

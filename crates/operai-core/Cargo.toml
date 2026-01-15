@@ -27,3 +27,4 @@ serde_json.workspace = true
 async-trait = "0.1.89"
 sha256 = "1.6.0"
 rkyv = { workspace = true }
+backon = { workspace = true }
